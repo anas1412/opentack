@@ -106,15 +106,20 @@ export default function TicketCreate() {
           <div>
             <label className="block text-sm font-medium text-zinc-300 mb-1.5">
               Description
+              <span className="text-xs text-zinc-500 font-normal ml-2">→ initial prompt</span>
             </label>
             <textarea
               value={description}
               onChange={(e) => setDescription(e.target.value)}
-              placeholder="Describe the task in detail. This becomes opencode's initial prompt."
+              placeholder="Describe the task in detail. This becomes opencode's first message when you start a session."
               rows={6}
               required
               className="w-full bg-zinc-800 border border-zinc-700 rounded-md px-3 py-2 text-sm text-white placeholder-zinc-500 focus:outline-none focus:ring-2 focus:ring-[var(--accent)] focus:border-transparent resize-none"
             />
+            <p className="text-xs text-zinc-600 mt-1.5 flex items-center gap-1">
+              <span className="inline-block w-1 h-1 rounded-full bg-zinc-600" />
+              This description is sent to opencode as the first prompt when you start a session (can be disabled in Settings).
+            </p>
           </div>
 
           {/* Repo — hidden when already selected in sidebar */}

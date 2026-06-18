@@ -1,6 +1,8 @@
 import type { FastifyInstance } from "fastify";
 import { and, desc, eq } from "drizzle-orm";
 import { z } from "zod";
+import { readFileSync, existsSync } from "fs";
+import { join } from "path";
 import { db, schema } from "../../db";
 import { startServer } from "../opencode-manager";
 import { emitSse } from "../sse";
@@ -9,6 +11,60 @@ import { enrichFromOpencode, getOpencodeDb, verifyOpencodeSession } from "./cost
 const createSessionSchema = z.object({
   ticketId: z.string().uuid(),
 });
+
+// ─── Opencode config helpers ──────────────────────────────────────────
+
+function getOpencodeConfigPath(): string {
+  const configDir = process.env.XDG_CONFIG_HOME
+    ? join(process.env.XDG_CONFIG_HOME, "opencode")
+    : join(process.env.HOME!, ".config", "opencode");
+  return join(configDir, "opencode.json");
+}
+
+function readOpencodeModel(): { providerID: string; id: string } | undefined {
+  const path = getOpencodeConfigPath();
+  if (!existsSync(path)) return undefined;
+  try {
+    const config = JSON.parse(readFileSync(path, "utf-8"));
+    const modelStr = config.model as string | undefined;
+    if (!modelStr) return undefined;
+    const parts = modelStr.split("/");
+    if (parts.length === 2) return { providerID: parts[0], id: parts[1] };
+    if (parts.length === 1) return { providerID: "", id: parts[0] };
+    return undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+// ─── Opencode message injector ────────────────────────────────────────
+
+async function sendDescriptionToOpencode(
+  port: number,
+  repoPath: string,
+  opencodeSessionId: string,
+  description: string,
+): Promise<void> {
+  const url = `http://127.0.0.1:${port}/session/${opencodeSessionId}/message?directory=${encodeURIComponent(repoPath)}`;
+  const body = {
+    noReply: false,
+    parts: [{ type: "text" as const, text: description }],
+  };
+
+  try {
+    const res = await fetch(url, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+    });
+    if (!res.ok) {
+      const text = await res.text().catch(() => "unknown");
+      console.warn(`Failed to forward description to opencode: ${res.status} ${text.slice(0, 200)}`);
+    }
+  } catch (err) {
+    console.warn("Failed to forward description to opencode:", err);
+  }
+}
 
 export function registerSessionRoutes(app: FastifyInstance) {
   // Recent sessions activity feed (across all repos)
@@ -234,10 +290,24 @@ export function registerSessionRoutes(app: FastifyInstance) {
       });
     }
 
+    // Read model from opencode.json config
+    const opencodeModel = readOpencodeModel();
+    const modelStr = opencodeModel
+      ? `${opencodeModel.providerID}/${opencodeModel.id}`
+      : "unknown";
+
+    // Update model on the session row (new sessions) or skip (reused sessions keep old model)
+    if (!existingSession) {
+      await db
+        .update(schema.sessions)
+        .set({ model: modelStr })
+        .where(eq(schema.sessions.id, sessionId));
+    }
+
     // Create or reuse opencode session ID (preserves conversation history)
     if (!opencodeSessionId) {
       try {
-        opencodeSessionId = await createOpencodeSession(port, repo.localPath, ticket.title);
+        opencodeSessionId = await createOpencodeSession(port, repo.localPath, ticket.title, opencodeModel);
       } catch (err) {
         app.log.warn({ err, sessionId }, "Could not create opencode session — messages won't persist");
       }
@@ -248,6 +318,20 @@ export function registerSessionRoutes(app: FastifyInstance) {
       .update(schema.sessions)
       .set({ opencodeSessionId })
       .where(eq(schema.sessions.id, sessionId));
+
+    // If this is a new session (not reuse), check if we should forward the description
+    if (!existingSession && opencodeSessionId) {
+      const [settingsRow] = await db
+        .select()
+        .from(schema.settings)
+        .where(eq(schema.settings.id, "global"));
+
+      const forwardEnabled = settingsRow?.forwardDescription ?? true;
+      if (forwardEnabled && ticket.description) {
+        // Fire-and-forget — don't block the response
+        sendDescriptionToOpencode(port, repo.localPath, opencodeSessionId, ticket.description);
+      }
+    }
 
     return {
       id: sessionId,
@@ -295,10 +379,12 @@ async function createOpencodeSession(
   port: number,
   repoPath: string,
   title?: string,
+  model?: { providerID: string; id: string },
 ): Promise<string> {
   const url = `http://127.0.0.1:${port}/session?directory=${encodeURIComponent(repoPath)}`;
   const body: Record<string, unknown> = {};
   if (title) body.title = title;
+  if (model) body.model = model;
 
   const res = await fetch(url, {
     method: "POST",

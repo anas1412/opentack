@@ -97,4 +97,15 @@ export const repos = sqliteTable("repo", {
   lastUsedAt: integer("last_used_at", { mode: "number" }),
 });
 
+// ─── Settings (singleton row) ───────────────────────────────────────────
+
+export const settings = sqliteTable("settings", {
+  id: text("id").primaryKey(), // always "global"
+  forwardDescription: integer("forward_description", { mode: "boolean" })
+    .notNull()
+    .default(true),
+  theme: text("theme").notNull().default("amber"),
+  updatedAt: integer("updated_at", { mode: "number" }).notNull(),
+});
+
 // ─── CostRecord — REMOVED. opencode is the sole source of truth for costs. ─────

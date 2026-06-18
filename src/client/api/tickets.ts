@@ -76,6 +76,12 @@ export function fetchTicketSessions(ticketId: string): Promise<import("../../sha
   return apiFetch(`/api/tickets/${ticketId}/sessions`);
 }
 
+export function generateNotes(ticketId: string): Promise<{ notes: string }> {
+  return apiFetch(`/api/tickets/${ticketId}/generate-notes`, {
+    method: "POST",
+  });
+}
+
 export function createTicketSession(ticketId: string): Promise<{
   id: string;
   ticketId: string;

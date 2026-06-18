@@ -35,6 +35,15 @@ export const ticketUpdateSchema = z.object({
   tags: z.array(z.string()).optional(),
 });
 
+export const settingsUpdateSchema = z.object({
+  forwardDescription: z.boolean().optional(),
+  theme: z.enum(["amber", "emerald", "violet", "sky"]).optional(),
+});
+
+export const opencodeConfigUpdateSchema = z.object({
+  model: z.string().min(1).optional(),
+});
+
 export const ticketListQuerySchema = z.object({
   status: z
     .enum(["open", "in_progress", "needs_review", "changes_requested", "resolved", "closed"])

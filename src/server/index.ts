@@ -8,6 +8,8 @@ import { registerRepoRoutes } from "./routes/repo";
 import { registerTicketRoutes } from "./routes/ticket";
 import { registerSessionRoutes } from "./routes/session";
 import { registerCostRoutes } from "./routes/cost";
+import { registerSettingsRoutes } from "./routes/settings";
+import { registerOpencodeConfigRoutes } from "./routes/opencode-config";
 import { sseEmitter, SSE_EVENT, type SseEvent } from "./sse";
 
 let _app: Awaited<ReturnType<typeof buildApp>> | null = null;
@@ -57,6 +59,8 @@ async function buildApp() {
   registerTicketRoutes(app);
   registerSessionRoutes(app);
   registerCostRoutes(app);
+  registerSettingsRoutes(app);
+  registerOpencodeConfigRoutes(app);
 
   // ── SPA fallback ─────────────────────────────────────────────────
   app.setNotFoundHandler((_req, reply) => {

@@ -1,5 +1,7 @@
 import { useState, useMemo } from "react";
-import { useTicket, useUpdateTicket, useDeleteTicket, useTicketSessions } from "../hooks/useTickets";
+import ReactMarkdown from "react-markdown";
+import remarkGfm from "remark-gfm";
+import { useTicket, useUpdateTicket, useDeleteTicket, useTicketSessions, useGenerateNotes } from "../hooks/useTickets";
 import { useRepos } from "../hooks/useRepos";
 import { useAppStore } from "../store/app";
 import type { TicketStatus, TicketPriority, TicketCategory } from "../../shared/types";
@@ -39,6 +41,7 @@ export default function TicketDetail({ ticketId, onStartSession, sessionActive }
   const [tagsStr, setTagsStr] = useState("");
   const [deleteConfirm, setDeleteConfirm] = useState(false);
   const [saving, setSaving] = useState(false);
+  const generateNotesMutation = useGenerateNotes();
 
   const repoName = useMemo(
     () => repos?.find((r) => r.id === ticket?.repoId)?.name,
@@ -89,6 +92,11 @@ export default function TicketDetail({ ticketId, onStartSession, sessionActive }
     if (!ticket) return;
     await deleteTicket.mutateAsync(ticket.id);
     setSelectedTicketId(null);
+  }
+
+  async function handleGenerateNotes() {
+    if (!ticket) return;
+    await generateNotesMutation.mutateAsync(ticket.id);
   }
 
   if (isLoading) {
@@ -195,9 +203,29 @@ export default function TicketDetail({ ticketId, onStartSession, sessionActive }
         )}
 
         {/* Notes */}
-        <p className="text-xs font-medium text-zinc-500 uppercase tracking-wider mb-1.5">Notes</p>
+        <div className="flex items-center justify-between mb-1.5">
+          <p className="text-xs font-medium text-zinc-500 uppercase tracking-wider">Notes</p>
+          <button
+            onClick={handleGenerateNotes}
+            disabled={generateNotesMutation.isPending}
+            className="flex items-center gap-1 px-2 py-1 rounded text-xs font-medium text-zinc-400 hover:text-zinc-200 hover:bg-zinc-800 transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
+          >
+            {generateNotesMutation.isPending ? (
+              <span className="w-3 h-3 border border-zinc-500 border-t-transparent rounded-full animate-spin" />
+            ) : (
+              <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                <polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2" />
+              </svg>
+            )}
+            {generateNotesMutation.isPending ? "Generating..." : "Generate"}
+          </button>
+        </div>
         {ticket.notes ? (
-          <p className="text-sm text-zinc-400 whitespace-pre-wrap leading-relaxed">{ticket.notes}</p>
+          <div className="text-sm text-zinc-400 leading-relaxed [&_ul]:list-disc [&_ul]:pl-4 [&_ol]:list-decimal [&_ol]:pl-4 [&_strong]:text-zinc-200 [&_a]:text-amber-400 [&_a]:underline [&_code]:bg-zinc-800 [&_code]:px-1 [&_code]:rounded">
+            <ReactMarkdown remarkPlugins={[remarkGfm]}>
+              {ticket.notes}
+            </ReactMarkdown>
+          </div>
         ) : (
           <p className="text-xs text-zinc-600 italic">No notes</p>
         )}
@@ -328,8 +356,8 @@ export default function TicketDetail({ ticketId, onStartSession, sessionActive }
         <textarea
           value={description}
           onChange={(e) => setDescription(e.target.value)}
-          rows={4}
-          className="w-full bg-zinc-800/50 border border-zinc-800 rounded-md px-3 py-2 text-sm text-zinc-200 placeholder-zinc-600 focus:outline-none focus:ring-1 focus:ring-zinc-700 resize-none"
+          rows={Math.max(4, description.split('\n').length, Math.ceil(description.length / 60))}
+          className="w-full bg-zinc-800/50 border border-zinc-800 rounded-md px-3 py-2 text-sm text-zinc-200 placeholder-zinc-600 focus:outline-none focus:ring-1 focus:ring-zinc-700 font-mono resize-y"
         />
       </div>
 
@@ -352,8 +380,8 @@ export default function TicketDetail({ ticketId, onStartSession, sessionActive }
         <textarea
           value={notes}
           onChange={(e) => setNotes(e.target.value)}
-          rows={3}
-          className="w-full bg-zinc-800/50 border border-zinc-800 rounded-md px-3 py-2 text-sm text-zinc-200 placeholder-zinc-600 focus:outline-none focus:ring-1 focus:ring-zinc-700 resize-none"
+          rows={Math.max(3, notes.split('\n').length, Math.ceil(notes.length / 60))}
+          className="w-full bg-zinc-800/50 border border-zinc-800 rounded-md px-3 py-2 text-sm text-zinc-200 placeholder-zinc-600 focus:outline-none focus:ring-1 focus:ring-zinc-700 font-mono resize-y"
         />
       </div>
 

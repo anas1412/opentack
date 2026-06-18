@@ -143,3 +143,19 @@ export interface CostSummary {
   ticketCount: number;
   sessionCount: number;
 }
+
+// ─── Settings ──────────────────────────────────────────────────────────
+
+export const THEMES = ["amber", "emerald", "violet", "sky"] as const;
+export type Theme = (typeof THEMES)[number];
+
+export interface Settings {
+  forwardDescription: boolean;
+  theme: Theme;
+}
+
+// ─── Opencode config (opencode.json) ─────────────────────────────────────
+
+export interface OpencodeConfig {
+  model?: string;
+}

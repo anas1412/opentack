@@ -22,6 +22,13 @@
       "when": 1781775124929,
       "tag": "0002_absurd_jazinda",
       "breakpoints": true
+    },
+    {
+      "idx": 3,
+      "version": "6",
+      "when": 1781786196567,
+      "tag": "0003_mean_roland_deschain",
+      "breakpoints": true
     }
   ]
 }

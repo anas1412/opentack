@@ -1,5 +1,6 @@
 import type { FastifyInstance } from "fastify";
 import { eq, like, and, desc, sql, inArray } from "drizzle-orm";
+
 import { db, schema } from "../../db";
 import { ticketCreateSchema, ticketUpdateSchema, ticketListQuerySchema } from "../validators";
 import {
@@ -8,6 +9,7 @@ import {
   updateOpencodeSessionTitle,
   deleteOpencodeSession,
 } from "./cost-utils";
+import { startServer } from "../opencode-manager";
 import { z } from "zod";
 
 export function registerTicketRoutes(app: FastifyInstance) {
@@ -226,6 +228,173 @@ export function registerTicketRoutes(app: FastifyInstance) {
 
     await db.delete(schema.tickets).where(eq(schema.tickets.id, id));
     return reply.status(204).send();
+  });
+
+  // Generate notes from session data using opencode
+  app.post("/api/tickets/:id/generate-notes", async (req, reply) => {
+    const { id } = req.params as { id: string };
+
+    const [ticket] = await db.select().from(schema.tickets).where(eq(schema.tickets.id, id));
+    if (!ticket)
+      return reply.status(404).send({ error: "NOT_FOUND", message: "Ticket not found" });
+
+    // Find the latest session for this ticket (must have an opencode session attached)
+    const [session] = await db
+      .select()
+      .from(schema.sessions)
+      .where(
+        and(
+          eq(schema.sessions.ticketId, id),
+          sql`${schema.sessions.opencodeSessionId} IS NOT NULL`,
+        ),
+      )
+      .orderBy(desc(schema.sessions.createdAt))
+      .limit(1);
+
+    if (!session)
+      return reply.status(400).send({
+        error: "NO_SESSION",
+        message: "No session found for this ticket. Start a session first.",
+      });
+
+    const [repo] = await db.select().from(schema.repos).where(eq(schema.repos.id, ticket.repoId));
+    if (!repo)
+      return reply.status(404).send({ error: "NOT_FOUND", message: "Repo not found" });
+
+    let port: number;
+    try {
+      port = await startServer(repo.localPath);
+    } catch {
+      return reply.status(500).send({
+        error: "SERVER_START_FAILED",
+        message: "Could not start opencode server to generate notes.",
+      });
+    }
+
+    // Get the opencode session messages to build a transcript
+    if (!session.opencodeSessionId) {
+      return reply.status(400).send({
+        error: "NO_OPENCODE_SESSION",
+        message: "This session has no opencode session attached. The session may not have been started properly.",
+      });
+    }
+
+    // Fetch the actual messages from the opencode session
+    const msgRes = await fetch(
+      `http://127.0.0.1:${port}/session/${session.opencodeSessionId}/message?directory=${encodeURIComponent(repo.localPath)}`,
+    );
+    if (!msgRes.ok) {
+      return reply.status(502).send({
+        error: "FETCH_FAILED",
+        message: "Failed to read opencode session messages.",
+      });
+    }
+
+    type MainMessage = {
+      info: { role: string };
+      parts: Array<{ type: string; text?: string }>;
+    };
+    const mainMessages = await msgRes.json() as MainMessage[];
+
+    // Build transcript text from user + assistant exchanges
+    const transcriptText = (Array.isArray(mainMessages) ? mainMessages : [])
+      .filter((m) => m.info?.role === "user" || m.info?.role === "assistant")
+      .map((m) => {
+        const text = (m.parts ?? [])
+          .filter((p) => p.type === "text")
+          .map((p) => p.text ?? "")
+          .join(" ");
+        return `[${m.info.role}]: ${text}`;
+      })
+      .join("\n\n")
+      .slice(0, 30_000); // keep under token limit
+
+    const prompt = `Based ONLY on the session transcript below, write a brief summary (2-3 bullet points) of what was accomplished in this session.
+
+Rules:
+- Use ONLY the transcript below. Do NOT scan the repo, check git history, or reference anything outside this transcript.
+- Output in markdown bullet points.
+- Be specific about what was actually done (files changed, features added, bugs fixed).
+
+Ticket: ${ticket.title}
+Description: ${ticket.description.slice(0, 300)}
+
+<transcript>
+${transcriptText}
+</transcript>`;
+
+    try {
+      // 1. Create a temporary session for summarization
+      const createRes = await fetch(
+        `http://127.0.0.1:${port}/session?directory=${encodeURIComponent(repo.localPath)}`,
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ title: "summarize" }),
+        },
+      );
+      if (!createRes.ok) throw new Error("Failed to create temp session");
+      const { id: tempSessionId } = await createRes.json() as { id: string };
+
+      // 2. Send the summarization prompt to the temp session
+      const msgRes = await fetch(
+        `http://127.0.0.1:${port}/session/${tempSessionId}/message?directory=${encodeURIComponent(repo.localPath)}`,
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            parts: [{ type: "text", text: prompt }],
+          }),
+        },
+      );
+      if (!msgRes.ok) throw new Error("Failed to send prompt to temp session");
+
+      // 3. Wait for AI to finish
+      await fetch(
+        `http://127.0.0.1:${port}/api/session/${tempSessionId}/wait`,
+        { method: "POST" },
+      );
+
+      // 4. Read the AI response messages
+      const msgListRes = await fetch(
+        `http://127.0.0.1:${port}/session/${tempSessionId}/message?directory=${encodeURIComponent(repo.localPath)}`,
+      );
+      type MessageResponse = Array<{
+        info: { role: string };
+        parts: Array<{ type: string; text?: string }>;
+      }>;
+      const messages = await msgListRes.json() as MessageResponse;
+
+      // Extract text only from assistant messages
+      let notes = (Array.isArray(messages) ? messages : [])
+        .filter((m) => m.info?.role === "assistant")
+        .flatMap((m) => m.parts ?? [])
+        .filter((p) => p.type === "text" && p.text)
+        .map((p) => p.text!.trim())
+        .filter(Boolean)
+        .join("\n");
+
+      // 5. Clean up — delete temp session
+      fetch(
+        `http://127.0.0.1:${port}/session/${tempSessionId}?directory=${encodeURIComponent(repo.localPath)}`,
+        { method: "DELETE" },
+      ).catch(() => {}); // fire-and-forget cleanup
+
+      if (!notes) notes = "Session notes generated.";
+
+      // Save to ticket
+      await db
+        .update(schema.tickets)
+        .set({ notes, updatedAt: Date.now() })
+        .where(eq(schema.tickets.id, id));
+
+      return { notes };
+    } catch (err) {
+      return reply.status(502).send({
+        error: "GENERATE_FAILED",
+        message: err instanceof Error ? err.message : "Failed to generate notes",
+      });
+    }
   });
 
   // ── Batch operations ──

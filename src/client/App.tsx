@@ -1,6 +1,8 @@
-import { useMemo, useState } from "react";
+import { useMemo, useState, useEffect } from "react";
+import { useQuery } from "@tanstack/react-query";
 import { useAppStore } from "./store/app";
 import { useRepos } from "./hooks/useRepos";
+import { fetchSettings } from "./api/settings";
 import Sidebar from "./components/Sidebar";
 import Dashboard from "./components/Dashboard";
 import TicketList from "./components/TicketList";
@@ -12,8 +14,21 @@ import Settings from "./components/Settings";
 import { Plus, List, Columns, LayoutDashboard } from "lucide-react";
 
 export default function App() {
-  const { view, setView, setCreateOpen, selectedTicketId, selectedRepoId } = useAppStore();
+  const { view, setView, setCreateOpen, selectedTicketId, selectedRepoId, theme, setTheme } = useAppStore();
   const { data: repos } = useRepos();
+
+  // Load saved theme on mount
+  const { data: settings } = useQuery({
+    queryKey: ["settings"],
+    queryFn: fetchSettings,
+    staleTime: 60_000,
+  });
+
+  useEffect(() => {
+    if (settings?.theme) {
+      setTheme(settings.theme);
+    }
+  }, [settings, setTheme]);
   const [filters, setFilters] = useState<FilterValues>({
     search: "", status: "", priority: "", category: "",
   });
@@ -24,7 +39,7 @@ export default function App() {
   );
 
   return (
-    <div className="flex h-screen bg-zinc-950 text-zinc-100">
+    <div className="flex h-screen bg-zinc-950 text-zinc-100" data-theme={theme}>
       <Sidebar />
 
       {/* Main area */}

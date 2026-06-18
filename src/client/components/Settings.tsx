@@ -1,6 +1,13 @@
-import { useState, useMemo } from "react";
+import { useState, useEffect } from "react";
+import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { useRepos, useUpdateRepo } from "../hooks/useRepos";
-import { Settings2, Plus, X, Save } from "lucide-react";
+import { fetchSettings, updateSettings } from "../api/settings";
+import { fetchOpencodeConfig, updateOpencodeConfig } from "../api/opencode-config";
+import { THEMES, type Theme } from "../../shared/types";
+import { useAppStore } from "../store/app";
+import { Settings2, Plus, X, Save, Send, Palette, Cpu } from "lucide-react";
+
+// ─── Env var editor (unchanged from original) ──────────────────────────
 
 interface EnvEntry {
   key: string;
@@ -96,8 +103,130 @@ function RepoSettingsCard({ repo }: { repo: { id: string; name: string; envVars:
   );
 }
 
+// ─── Theme color swatch picker ───────────────────────────────────────
+
+const THEME_COLORS: Record<Theme, { bg: string; ring: string; label: string }> = {
+  amber: { bg: "bg-amber-500", ring: "ring-amber-400", label: "Amber" },
+  emerald: { bg: "bg-emerald-500", ring: "ring-emerald-400", label: "Emerald" },
+  violet: { bg: "bg-violet-500", ring: "ring-violet-400", label: "Violet" },
+  sky: { bg: "bg-sky-500", ring: "ring-sky-400", label: "Sky" },
+};
+
+function ThemePicker({ value, onChange }: { value: Theme; onChange: (t: Theme) => void }) {
+  return (
+    <div className="flex gap-3">
+      {THEMES.map((theme) => {
+        const colors = THEME_COLORS[theme];
+        return (
+          <button
+            key={theme}
+            onClick={() => onChange(theme)}
+            className={`w-10 h-10 rounded-full ${colors.bg} transition-all duration-150 ${
+              value === theme
+                ? `ring-2 ${colors.ring} ring-offset-2 ring-offset-zinc-950 scale-110`
+                : "ring-1 ring-zinc-700 hover:ring-zinc-500"
+            }`}
+            title={colors.label}
+          />
+        );
+      })}
+    </div>
+  );
+}
+
+// ─── Section card wrapper ────────────────────────────────────────────
+
+function SectionCard({ icon, title, description, children }: {
+  icon: React.ReactNode;
+  title: string;
+  description: string;
+  children: React.ReactNode;
+}) {
+  return (
+    <div className="border border-zinc-800 rounded-lg p-5">
+      <div className="flex items-center gap-2 mb-1">
+        <span className="text-zinc-400">{icon}</span>
+        <h3 className="text-sm font-medium text-white">{title}</h3>
+      </div>
+      <p className="text-xs text-zinc-500 mb-4">{description}</p>
+      {children}
+    </div>
+  );
+}
+
+// ─── Main Settings page ──────────────────────────────────────────────
+
 export default function Settings() {
-  const { data: repos, isLoading } = useRepos();
+  const qc = useQueryClient();
+  const { data: repos, isLoading: reposLoading } = useRepos();
+  const setTheme = useAppStore((s) => s.setTheme);
+
+  // ── Load settings ──────────────────────────────────────────────────
+  const { data: settings, isLoading: settingsLoading } = useQuery({
+    queryKey: ["settings"],
+    queryFn: fetchSettings,
+  });
+
+  const { data: opencodeCfg, isLoading: cfgLoading } = useQuery({
+    queryKey: ["opencode-config"],
+    queryFn: fetchOpencodeConfig,
+  });
+
+  // ── Local state ────────────────────────────────────────────────────
+  const [forward, setForward] = useState(true);
+  const [theme, setLocalTheme] = useState<Theme>("amber");
+  const [model, setModel] = useState("");
+  const [modelDirty, setModelDirty] = useState(false);
+
+  // Sync server state → local on load
+  useEffect(() => {
+    if (settings) {
+      setForward(settings.forwardDescription);
+      setLocalTheme(settings.theme);
+    }
+  }, [settings]);
+
+  useEffect(() => {
+    if (opencodeCfg) {
+      setModel(opencodeCfg.model || "");
+    }
+  }, [opencodeCfg]);
+
+  // ── Mutations ──────────────────────────────────────────────────────
+  const saveSettings = useMutation({
+    mutationFn: (input: { forwardDescription: boolean; theme: Theme }) => updateSettings(input),
+    onSuccess: (data) => {
+      qc.invalidateQueries({ queryKey: ["settings"] });
+      setTheme(data.theme);
+    },
+  });
+
+  const saveModel = useMutation({
+    mutationFn: (input: { model: string }) => updateOpencodeConfig(input),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ["opencode-config"] });
+      setModelDirty(false);
+    },
+  });
+
+  // ── Handlers ───────────────────────────────────────────────────────
+  const handleToggleForward = () => {
+    const next = !forward;
+    setForward(next);
+    saveSettings.mutate({ forwardDescription: next, theme });
+  };
+
+  const handleThemeChange = (t: Theme) => {
+    setLocalTheme(t);
+    saveSettings.mutate({ forwardDescription: forward, theme: t });
+    setTheme(t);
+  };
+
+  const handleModelSave = () => {
+    saveModel.mutate({ model });
+  };
+
+  const isLoading = settingsLoading || cfgLoading;
 
   return (
     <div className="max-w-2xl mx-auto space-y-6">
@@ -107,22 +236,98 @@ export default function Settings() {
           <h2 className="text-lg font-semibold text-white">Settings</h2>
         </div>
         <p className="text-sm text-zinc-500">
-          Manage repo configuration and environment variables.
+          Configure OpenTack and default model for opencode.
         </p>
       </div>
 
       {isLoading ? (
-        <p className="text-sm text-zinc-600">Loading repos…</p>
-      ) : repos && repos.length > 0 ? (
-        <div className="space-y-4">
-          {repos.map((repo) => (
-            <RepoSettingsCard key={repo.id} repo={repo} />
-          ))}
-        </div>
+        <p className="text-sm text-zinc-600">Loading settings…</p>
       ) : (
-        <p className="text-sm text-zinc-600 italic">
-          No repos added yet. Add one from the sidebar.
-        </p>
+        <>
+          {/* ── Section 1: Prompting ─────────────────────────────────── */}
+          <SectionCard
+            icon={<Send size={14} />}
+            title="Prompting"
+            description="Automatically forward the ticket description to opencode when starting a new session."
+          >
+            <label className="flex items-center justify-between cursor-pointer group">
+              <span className="text-sm text-zinc-300 group-hover:text-zinc-200 transition-colors">
+                Forward description to opencode
+              </span>
+              <button
+                onClick={handleToggleForward}
+                disabled={saveSettings.isPending}
+                className={`relative w-10 h-5 rounded-full transition-colors duration-200 ${
+                  forward ? "bg-[var(--accent)]" : "bg-zinc-700"
+                }`}
+              >
+                <span
+                  className={`absolute top-0.5 left-0.5 w-4 h-4 rounded-full bg-white transition-transform duration-200 ${
+                    forward ? "translate-x-5" : "translate-x-0"
+                  }`}
+                />
+              </button>
+            </label>
+          </SectionCard>
+
+          {/* ── Section 2: Appearance ───────────────────────────────── */}
+          <SectionCard
+            icon={<Palette size={14} />}
+            title="Appearance"
+            description="Choose your accent color theme."
+          >
+            <ThemePicker value={theme} onChange={handleThemeChange} />
+          </SectionCard>
+
+          {/* ── Section 3: Model ────────────────────────────────────── */}
+          <SectionCard
+            icon={<Cpu size={14} />}
+            title="Default Model"
+            description="Default model for new opencode sessions. Saved to opencode.json."
+          >
+            <div className="flex items-center gap-2">
+              <input
+                className="flex-1 bg-zinc-900 border border-zinc-800 rounded px-3 py-2 text-sm text-zinc-200 placeholder-zinc-600 outline-none focus:border-zinc-600 font-mono"
+                placeholder="opencode/big-pickle"
+                value={model}
+                onChange={(e) => { setModel(e.target.value); setModelDirty(true); }}
+              />
+              <button
+                onClick={handleModelSave}
+                disabled={saveModel.isPending || !modelDirty}
+                className="btn-primary !text-xs"
+              >
+                <Save size={12} />
+                {saveModel.isPending ? "Saving..." : "Save"}
+              </button>
+            </div>
+            <p className="text-xs text-zinc-600 mt-2">
+              Format: <code className="text-zinc-500">providerID/modelID</code>
+            </p>
+          </SectionCard>
+
+          {/* ── Section 4: Repo env vars (existing) ─────────────────── */}
+          <div>
+            <div className="flex items-center gap-2 mb-3">
+              <span className="text-zinc-400"><Settings2 size={14} /></span>
+              <h3 className="text-sm font-medium text-white">Repository Environment</h3>
+            </div>
+
+            {reposLoading ? (
+              <p className="text-sm text-zinc-600">Loading repos…</p>
+            ) : repos && repos.length > 0 ? (
+              <div className="space-y-4">
+                {repos.map((repo) => (
+                  <RepoSettingsCard key={repo.id} repo={repo} />
+                ))}
+              </div>
+            ) : (
+              <p className="text-sm text-zinc-600 italic">
+                No repos added yet. Add one from the sidebar.
+              </p>
+            )}
+          </div>
+        </>
       )}
     </div>
   );
