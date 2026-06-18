@@ -1,3 +1,5 @@
+import { execSync } from "child_process";
+import { existsSync } from "fs";
 import type { FastifyInstance } from "fastify";
 import { eq, like, and, desc, sql, inArray } from "drizzle-orm";
 
@@ -17,6 +19,10 @@ export function registerTicketRoutes(app: FastifyInstance) {
   app.post("/api/tickets", async (req, reply) => {
     const input = ticketCreateSchema.parse(req.body);
     const id = crypto.randomUUID();
+
+    // Look up repo to derive baseBranch
+    const [repo] = await db.select().from(schema.repos).where(eq(schema.repos.id, input.repoId));
+    const baseBranch = input.baseBranch ?? repo?.defaultBranch ?? "main";
 
     // Generate display branch name from title + category (no git ops performed)
     const prefixMap: Record<string, string> = {
@@ -43,7 +49,7 @@ export function registerTicketRoutes(app: FastifyInstance) {
       category: input.category,
       repoId: input.repoId,
       branch,
-      baseBranch: "",
+      baseBranch,
       sessionIds: "[]",
       activeSessionId: null,
       filesChanged: "[]",
@@ -146,7 +152,7 @@ export function registerTicketRoutes(app: FastifyInstance) {
     };
   });
 
-  // Get ticket (with real costs from opencode)
+  // Get ticket (with real costs from opencode + live files from git)
   app.get("/api/tickets/:id", async (req, reply) => {
     const { id } = req.params as { id: string };
     const [row] = await db.select().from(schema.tickets).where(eq(schema.tickets.id, id));
@@ -167,7 +173,11 @@ export function registerTicketRoutes(app: FastifyInstance) {
     }
 
     const ticket = deserializeTicket(row);
-    return { ...ticket, totalCostUsd: realCost, totalTokens: realTokens };
+
+    // Compute files changed live from git diff
+    const liveFiles = await computeChangedFiles(row);
+
+    return { ...ticket, totalCostUsd: realCost, totalTokens: realTokens, filesChanged: liveFiles };
   });
 
   // Update ticket
@@ -452,4 +462,53 @@ function deserializeTicket(row: typeof schema.tickets.$inferSelect) {
     activeSessionId: row.activeSessionId,
     resolvedAt: row.resolvedAt,
   };
+}
+
+/**
+ * Compute changed files by checking git in the repo.
+ * Checks three sources: branch diff, unstaged changes, staged changes.
+ */
+async function computeChangedFiles(row: typeof schema.tickets.$inferSelect): Promise<string[]> {
+  if (!row.branch) return [];
+
+  const [repo] = await db.select().from(schema.repos).where(eq(schema.repos.id, row.repoId));
+  if (!repo || !existsSync(repo.localPath)) return [];
+
+  const baseBranch = row.baseBranch || repo.defaultBranch || "main";
+  const files = new Set<string>();
+
+  // 1. Committed changes unique to the branch
+  try {
+    const out = execSync(
+      `git -C "${repo.localPath}" diff --name-only "${baseBranch}...${row.branch}" 2>/dev/null || true`,
+      { timeout: 5000, encoding: "utf-8" },
+    ).trim();
+    if (out) out.split("\n").filter(Boolean).forEach((f) => files.add(f));
+  } catch {
+    // branch may not exist yet
+  }
+
+  // 2. Unstaged changes (files opencode is actively editing)
+  try {
+    const out = execSync(
+      `git -C "${repo.localPath}" diff --name-only 2>/dev/null || true`,
+      { timeout: 5000, encoding: "utf-8" },
+    ).trim();
+    if (out) out.split("\n").filter(Boolean).forEach((f) => files.add(f));
+  } catch {
+    // ignore
+  }
+
+  // 3. Staged but not committed changes
+  try {
+    const out = execSync(
+      `git -C "${repo.localPath}" diff --cached --name-only 2>/dev/null || true`,
+      { timeout: 5000, encoding: "utf-8" },
+    ).trim();
+    if (out) out.split("\n").filter(Boolean).forEach((f) => files.add(f));
+  } catch {
+    // ignore
+  }
+
+  return Array.from(files);
 }

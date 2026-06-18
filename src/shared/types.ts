@@ -111,6 +111,7 @@ export interface TicketCreateInput {
   category: TicketCategory;
   priority: TicketPriority;
   tags?: string[];
+  baseBranch?: string;
 }
 
 export interface TicketUpdateInput {

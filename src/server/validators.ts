@@ -21,6 +21,7 @@ export const ticketCreateSchema = z.object({
   category: z.enum(["feature", "bug", "refactor", "chore", "docs"]),
   priority: z.enum(["low", "medium", "high", "critical"]).default("medium"),
   tags: z.array(z.string()).optional().default([]),
+  baseBranch: z.string().min(1).max(128).optional(),
 });
 
 export const ticketUpdateSchema = z.object({
