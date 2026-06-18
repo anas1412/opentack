@@ -5,7 +5,7 @@ import { useCostSummary } from "../hooks/useCostSummary";
 import { useAppStore } from "../store/app";
 import ActivityTimeline from "./ActivityTimeline";
 import CostChart from "./CostChart";
-import { Ticket, Layers, Circle, Play, DollarSign, ArrowRight, GitBranch, Clock } from "lucide-react";
+import { Ticket, Layers, Circle, Play, DollarSign, ArrowRight, GitBranch, Clock, CheckCheck } from "lucide-react";
 
 function StatCard({
   icon,
@@ -51,8 +51,9 @@ export default function Dashboard({ repoId }: DashboardProps) {
     const tickets = ticketsData?.tickets ?? [];
     const total = tickets.length;
     const open = tickets.filter((t) => t.status === "open" || t.status === "in_progress").length;
+    const resolved = tickets.filter((t) => t.status === "resolved" || t.status === "closed").length;
     const active = tickets.filter((t) => t.activeSessionId !== null).length;
-    return { total, open, active };
+    return { total, open, resolved, active };
   }, [ticketsData]);
 
   const repoCost = useMemo(() => {
@@ -82,7 +83,7 @@ export default function Dashboard({ repoId }: DashboardProps) {
       </div>
 
       {/* Stat cards */}
-      <div className="grid grid-cols-4 gap-4">
+      <div className="grid grid-cols-5 gap-4">
         <StatCard
           icon={<Ticket size={18} className="text-blue-400" />}
           label="Total tickets"
@@ -95,6 +96,13 @@ export default function Dashboard({ repoId }: DashboardProps) {
           value={String(stats.open)}
           sub={stats.total > 0 ? `${Math.round((stats.open / stats.total) * 100)}% of all` : undefined}
           color="bg-amber-500/10"
+        />
+        <StatCard
+          icon={<CheckCheck size={18} className="text-emerald-400" />}
+          label="Resolved"
+          value={String(stats.resolved)}
+          sub={stats.total > 0 ? `${Math.round((stats.resolved / stats.total) * 100)}% of all` : undefined}
+          color="bg-emerald-500/10"
         />
         <StatCard
           icon={<Play size={18} className="text-green-400" />}
