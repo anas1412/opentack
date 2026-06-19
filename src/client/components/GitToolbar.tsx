@@ -6,6 +6,7 @@ import {
   GitPullRequest,
   RefreshCw,
   Wrench,
+  MessageCircle,
   Loader2,
 } from "lucide-react";
 import { sendSessionMessage } from "../api/sessions";
@@ -14,7 +15,7 @@ interface GitToolbarProps {
   sessionId: string | null;
 }
 
-type ActionId = "commit" | "push" | "merge" | "pr" | "sync" | "fix";
+type ActionId = "commit" | "push" | "merge" | "pr" | "sync" | "fix" | "explain";
 
 interface Action {
   id: ActionId;
@@ -64,7 +65,15 @@ export default function GitToolbar({ sessionId }: GitToolbarProps) {
       id: "fix",
       label: "Fix Code",
       icon: <Wrench size={14} />,
-      enabled: false,
+      enabled: true,
+      prompt: "Fix any issues or bugs in the code I'm looking at",
+    },
+    {
+      id: "explain",
+      label: "Explain",
+      icon: <MessageCircle size={14} />,
+      enabled: true,
+      prompt: "Explain in simple terms and briefly, I have adhd",
     },
   ];
 

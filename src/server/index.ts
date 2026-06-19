@@ -2,7 +2,7 @@ import Fastify from "fastify";
 import cors from "@fastify/cors";
 import fastifyStatic from "@fastify/static";
 import path from "path";
-import { eq, isNull } from "drizzle-orm";
+import { isNull } from "drizzle-orm";
 import { migrate } from "drizzle-orm/bun-sqlite/migrator";
 import { db, schema } from "../db";
 import { registerRepoRoutes } from "./routes/repo";
@@ -13,6 +13,7 @@ import { registerSettingsRoutes } from "./routes/settings";
 import { registerOpencodeConfigRoutes } from "./routes/opencode-config";
 import { isSessionAlive, registerRecoveredSession } from "./opencode-manager";
 import { sseEmitter, SSE_EVENT, type SseEvent } from "./sse";
+import { startCostWatcher } from "./cost-watcher";
 
 let _app: Awaited<ReturnType<typeof buildApp>> | null = null;
 
@@ -77,9 +78,9 @@ async function buildApp() {
  * Scans sessions with no endedAt, checks if the original PID+port is still alive,
  * and re-registers healthy ones in the in-memory server map.
  *
- * Sessions without PID/port (pre-migration or where save failed) are left as-is —
- * we can't verify their state, so we don't touch them. The user can stop them manually.
- * Only sessions with a confirmed-dead process get cleaned up.
+ * Sessions with dead or no PID/port are left as-is — the user sees them as active
+ * in the UI. When they interact (send a message), the handler auto-restarts the
+ * opencode serve process. This avoids destroying active tickets on restart.
  */
 async function recoverOrphanedSessions() {
   const active = await db
@@ -88,8 +89,6 @@ async function recoverOrphanedSessions() {
     .where(isNull(schema.sessions.endedAt));
 
   let recovered = 0;
-  let cleaned = 0;
-  let skipped = 0;
 
   for (const session of active) {
     if (session.pid != null && session.serverPort != null) {
@@ -97,32 +96,13 @@ async function recoverOrphanedSessions() {
         registerRecoveredSession(session.id, session.serverPort, session.cwd);
         console.log(`[recovery] Session ${session.id} recovered on port ${session.serverPort}`);
         recovered++;
-      } else {
-        // Process confirmed dead — clean up
-        await cleanupDeadSession(session.id, session.ticketId);
-        cleaned++;
       }
-    } else {
-      // No PID/port saved — can't verify. Leave as-is so active tickets aren't nuked.
-      skipped++;
     }
   }
 
-  if (recovered > 0 || cleaned > 0 || skipped > 0) {
-    console.log(`[recovery] ${recovered} recovered, ${cleaned} cleaned (dead), ${skipped} skipped (no pid/port)`);
+  if (recovered > 0) {
+    console.log(`[recovery] ${recovered} sessions recovered`);
   }
-}
-
-async function cleanupDeadSession(sessionId: string, ticketId: string) {
-  await db
-    .update(schema.sessions)
-    .set({ exitCode: -1, exitReason: "error", endedAt: Date.now(), pid: null, serverPort: null })
-    .where(eq(schema.sessions.id, sessionId));
-
-  await db
-    .update(schema.tickets)
-    .set({ activeSessionId: null, updatedAt: Date.now() })
-    .where(eq(schema.tickets.id, ticketId));
 }
 
 export async function startServer(port: number = 3000) {
@@ -137,6 +117,10 @@ export async function startServer(port: number = 3000) {
 
   await app.listen({ port, host: "127.0.0.1" });
   app.log.info(`OpenTack running at http://localhost:${port}`);
+
+  // Start background cost watcher — polls opencode DB for active session costs
+  // and emits session.cost SSE events when values change. Replaces client-side polling.
+  startCostWatcher(3000);
 
   return app;
 }
