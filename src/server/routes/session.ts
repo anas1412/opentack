@@ -2,11 +2,13 @@ import type { FastifyInstance } from "fastify";
 import { and, desc, eq } from "drizzle-orm";
 import { z } from "zod";
 import { readFileSync, existsSync } from "fs";
+import { execSync } from "child_process";
 import { join } from "path";
 import { db, schema } from "../../db";
 import { startSessionServer, stopSessionServer, getSessionPort, getSessionPid } from "../opencode-manager";
 import { emitSse } from "../sse";
 import { enrichFromOpencode, getOpencodeDb, verifyOpencodeSession, fetchOpencodeSessionCost } from "./cost-utils";
+import { createWorktreeForTicket } from "./worktree";
 
 // Track which sessions are currently improving prompts (for client polling)
 const improvingSessions = new Map<string, boolean>();
@@ -300,6 +302,15 @@ export function registerSessionRoutes(app: FastifyInstance) {
     if (!repo)
       return reply.status(404).send({ error: "NOT_FOUND", message: "Repo not found" });
 
+    // Auto-create worktree on first session start if it doesn't exist yet
+    let sessionCwd: string;
+    if (ticket.worktreePath) {
+      sessionCwd = ticket.worktreePath;
+    } else {
+      app.log.info({ ticketId: ticket.id }, "No worktree yet — creating one");
+      sessionCwd = await createWorktreeForTicket(ticket, repo, app.log);
+    }
+
     // One session per ticket — find any existing session (active or ended)
     const [existingSession] = await db
       .select()
@@ -339,7 +350,7 @@ export function registerSessionRoutes(app: FastifyInstance) {
         ticketId: input.ticketId,
         opencodeVersion: "latest",
         model: "unknown",
-        cwd: repo.localPath,
+        cwd: sessionCwd,
         branch: ticket.branch,
         initialPrompt: ticket.description,
         opencodeSessionId: null,
@@ -376,7 +387,7 @@ export function registerSessionRoutes(app: FastifyInstance) {
     // Start opencode serve for this session (one server per session for parallel isolation)
     let port: number;
     try {
-      port = await startSessionServer(sessionId, repo.localPath);
+      port = await startSessionServer(sessionId, sessionCwd);
       // Persist PID + port for orphan recovery
       const pid = getSessionPid(sessionId);
       if (pid) {
@@ -556,9 +567,10 @@ export function registerSessionRoutes(app: FastifyInstance) {
       return reply.status(404).send({ error: "NOT_FOUND", message: "Session not found" });
 
     try {
-      const head = readFileSync(join(session.cwd, ".git", "HEAD"), "utf-8").trim();
-      const refPrefix = "ref: refs/heads/";
-      const branch = head.startsWith(refPrefix) ? head.slice(refPrefix.length) : null;
+      const branch = execSync(
+        `git -C "${session.cwd}" symbolic-ref --short HEAD 2>/dev/null`,
+        { timeout: 5000, encoding: "utf-8" },
+      ).trim();
       if (!branch) throw new Error("Not on a branch");
       return { branch };
     } catch {

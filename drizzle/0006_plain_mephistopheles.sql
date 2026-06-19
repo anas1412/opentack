@@ -1,0 +1,1 @@
+ALTER TABLE `ticket` ADD `worktree_path` text;

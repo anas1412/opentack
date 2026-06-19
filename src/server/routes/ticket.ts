@@ -61,6 +61,7 @@ export function registerTicketRoutes(app: FastifyInstance) {
       notes: "",
       createdAt: Date.now(),
       updatedAt: Date.now(),
+      worktreePath: null,
       resolvedAt: null,
     };
 

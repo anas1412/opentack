@@ -1,21 +1,23 @@
-import { useState } from "react";
+import { useState, useEffect, useCallback } from "react";
 import {
   GitCommitHorizontal,
   GitMerge,
   Upload,
   GitPullRequest,
   RefreshCw,
-  Wrench,
-  MessageCircle,
   Loader2,
+  Trash2,
+  CheckCircle2,
 } from "lucide-react";
 import { sendSessionMessage } from "../api/sessions";
+import { fetchWorktrees, removeWorktree } from "../api/worktrees";
 
 interface GitToolbarProps {
   sessionId: string | null;
+  ticketId: string;
 }
 
-type ActionId = "commit" | "push" | "merge" | "pr" | "sync" | "fix" | "explain";
+type ActionId = "commit" | "push" | "pr" | "merge" | "sync";
 
 interface Action {
   id: ActionId;
@@ -25,8 +27,24 @@ interface Action {
   prompt?: string;
 }
 
-export default function GitToolbar({ sessionId }: GitToolbarProps) {
+export default function GitToolbar({ sessionId, ticketId }: GitToolbarProps) {
   const [loading, setLoading] = useState<ActionId | null>(null);
+  const [worktreeLoading, setWorktreeLoading] = useState(false);
+  const [hasWorktree, setHasWorktree] = useState(false);
+  const [worktreeError, setWorktreeError] = useState<string | null>(null);
+
+  // Check if a worktree exists for this ticket on mount
+  useEffect(() => {
+    let cancelled = false;
+    fetchWorktrees()
+      .then((list) => {
+        if (!cancelled) {
+          setHasWorktree(list.some((w) => w.id === ticketId));
+        }
+      })
+      .catch(() => {});
+    return () => { cancelled = true; };
+  }, [ticketId]);
 
   const actions: Action[] = [
     {
@@ -41,39 +59,28 @@ export default function GitToolbar({ sessionId }: GitToolbarProps) {
       label: "Push",
       icon: <Upload size={14} />,
       enabled: true,
-      prompt: "push changes",
-    },
-    {
-      id: "merge",
-      label: "Merge",
-      icon: <GitMerge size={14} />,
-      enabled: false,
-    },
-    {
-      id: "pr",
-      label: "Create PR",
-      icon: <GitPullRequest size={14} />,
-      enabled: false,
+      prompt: "push the current branch to GitHub",
     },
     {
       id: "sync",
       label: "Sync Branch",
       icon: <RefreshCw size={14} />,
-      enabled: false,
+      enabled: true,
+      prompt: "sync this branch with the latest main — fetch and rebase",
     },
     {
-      id: "fix",
-      label: "Fix Code",
-      icon: <Wrench size={14} />,
+      id: "pr",
+      label: "Create PR",
+      icon: <GitPullRequest size={14} />,
       enabled: true,
-      prompt: "Fix any issues or bugs in the code I'm looking at",
+      prompt: "create a pull request for this branch on GitHub",
     },
     {
-      id: "explain",
-      label: "Explain",
-      icon: <MessageCircle size={14} />,
+      id: "merge",
+      label: "Merge",
+      icon: <GitMerge size={14} />,
       enabled: true,
-      prompt: "Explain in simple terms and briefly, I have adhd",
+      prompt: "merge this branch directly into main and delete the branch — no pull request",
     },
   ];
 
@@ -89,8 +96,52 @@ export default function GitToolbar({ sessionId }: GitToolbarProps) {
     }
   }
 
+  async function handleRemoveWorktree() {
+    setWorktreeLoading(true);
+    setWorktreeError(null);
+    try {
+      await removeWorktree(ticketId);
+      setHasWorktree(false);
+    } catch (err) {
+      setWorktreeError(err instanceof Error ? err.message : "Failed to remove worktree");
+    } finally {
+      setWorktreeLoading(false);
+    }
+  }
+
   return (
     <div className="border-t border-zinc-800 bg-zinc-950/95 px-2 py-1.5 flex items-center gap-1 overflow-x-auto">
+      {/* Worktree status + remove (worktree auto-created on session start) */}
+      {hasWorktree && (
+        <>
+          <span className="flex items-center gap-1 px-1.5 text-xs text-emerald-500 shrink-0">
+            <CheckCircle2 size={12} />
+            Worktree
+          </span>
+          <button
+            onClick={handleRemoveWorktree}
+            disabled={worktreeLoading}
+            className="flex items-center gap-1 px-2 py-1 rounded text-xs font-medium text-zinc-400 hover:text-red-400 hover:bg-red-500/10 transition-colors shrink-0 disabled:opacity-40"
+            title="Remove worktree + delete branch"
+          >
+            {worktreeLoading ? (
+              <Loader2 size={14} className="animate-spin" />
+            ) : (
+              <Trash2 size={14} />
+            )}
+            Remove
+          </button>
+          <span className="w-px h-4 bg-zinc-700 mx-1 shrink-0" />
+        </>
+      )}
+
+      {worktreeError && (
+        <span className="text-xs text-red-400 shrink-0 px-1" title={worktreeError}>
+          Error
+        </span>
+      )}
+
+      {/* Git / opencode actions */}
       {actions.map((action) => {
         const isLoading = loading === action.id;
         const disabled = !action.enabled || loading !== null;

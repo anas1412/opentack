@@ -43,6 +43,13 @@
       "when": 1781880000002,
       "tag": "0005_closed_doctor_spectrum",
       "breakpoints": true
+    },
+    {
+      "idx": 6,
+      "version": "6",
+      "when": 1781861463110,
+      "tag": "0006_plain_mephistopheles",
+      "breakpoints": true
     }
   ]
 }

@@ -208,7 +208,7 @@ export default function SplitView() {
               opencode · port {opencodePort}{currentBranch ? ` · ${currentBranch}` : ""}
             </span>
             <div className="flex-1" />
-            <GitToolbar sessionId={sessionId} />
+            <GitToolbar sessionId={sessionId} ticketId={ticketId} />
             <div className="flex items-center gap-2 shrink-0">
               <a
                 href={opencodeUrl}

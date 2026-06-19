@@ -41,6 +41,8 @@ export const tickets = sqliteTable("ticket", {
   tags: text("tags").notNull().default("[]"), // JSON array
   notes: text("notes").notNull().default(""),
 
+  worktreePath: text("worktree_path"),
+
   createdAt: integer("created_at", { mode: "number" }).notNull(),
   updatedAt: integer("updated_at", { mode: "number" }).notNull(),
   resolvedAt: integer("resolved_at", { mode: "number" }),

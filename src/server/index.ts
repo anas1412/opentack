@@ -12,6 +12,7 @@ import { registerCostRoutes } from "./routes/cost";
 import { registerSettingsRoutes } from "./routes/settings";
 import { registerOpencodeConfigRoutes } from "./routes/opencode-config";
 import { registerJournalRoutes } from "./routes/journal";
+import { registerWorktreeRoutes } from "./routes/worktree";
 import { isSessionAlive, registerRecoveredSession } from "./opencode-manager";
 import { sseEmitter, SSE_EVENT, type SseEvent } from "./sse";
 import { startCostWatcher } from "./cost-watcher";
@@ -66,6 +67,7 @@ async function buildApp() {
   registerSettingsRoutes(app);
   registerOpencodeConfigRoutes(app);
   registerJournalRoutes(app);
+  registerWorktreeRoutes(app);
 
   // ── SPA fallback ─────────────────────────────────────────────────
   app.setNotFoundHandler((_req, reply) => {
