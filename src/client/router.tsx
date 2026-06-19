@@ -17,6 +17,7 @@ import Dashboard from "./components/Dashboard";
 import TicketList from "./components/TicketList";
 import KanbanBoard from "./components/KanbanBoard";
 import Settings from "./components/Settings";
+import UsagePage from "./components/UsagePage";
 import SplitView from "./components/SplitView";
 import TicketCreate from "./components/TicketCreate";
 import JournalView from "./components/JournalView";
@@ -190,6 +191,13 @@ const settingsRoute = createRoute({
   component: Settings,
 });
 
+const usageRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: "/usage",
+  validateSearch: contentSearchSchema,
+  component: UsagePage,
+});
+
 const ticketRoute = createRoute({
   getParentRoute: () => rootRoute,
   path: "/tickets/$ticketId",
@@ -201,12 +209,13 @@ const ticketRoute = createRoute({
 const routeTree = rootRoute.addChildren([
   contentLayout.addChildren([indexRoute, listRoute, boardRoute, journalRoute]),
   settingsRoute,
+  usageRoute,
   ticketRoute,
 ]);
 
 const router = createRouter({ routeTree });
 
-export { router, indexRoute, listRoute, boardRoute, journalRoute, ticketRoute };
+export { router, indexRoute, listRoute, boardRoute, journalRoute, ticketRoute, usageRoute };
 
 // ─── Type augmentation for type-safe router usage ────────────────────
 

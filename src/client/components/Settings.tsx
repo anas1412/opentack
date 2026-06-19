@@ -254,7 +254,8 @@ export default function Settings() {
   const isLoading = settingsLoading || cfgLoading;
 
   return (
-    <div className="max-w-2xl mx-auto space-y-6">
+    <div className="flex-1 overflow-auto p-6">
+      <div className="max-w-2xl mx-auto space-y-6">
       <div>
         <div className="flex items-center gap-2 mb-1">
           <Settings2 size={16} className="text-zinc-400" />
@@ -383,6 +384,7 @@ export default function Settings() {
           </div>
         </>
       )}
+    </div>
     </div>
   );
 }

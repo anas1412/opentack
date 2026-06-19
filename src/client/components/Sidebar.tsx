@@ -5,7 +5,7 @@ import { useRepos, useDeleteRepo } from "../hooks/useRepos";
 import { useTickets } from "../hooks/useTickets";
 import { useCostSummary } from "../hooks/useCostSummary";
 import AddRepoModal from "./AddRepoModal";
-import { GitBranch, FolderPlus, Trash2, Layers, ArrowRight, Settings2, Pin, Plus } from "lucide-react";
+import { GitBranch, FolderPlus, Trash2, Layers, ArrowRight, Settings2, Pin, Plus, BarChart3 } from "lucide-react";
 
 function useUrlRepoId(): string | undefined {
   const search = useSearch({ strict: false }) as Record<string, unknown>;
@@ -149,6 +149,14 @@ export default function Sidebar() {
           </div>
         )}
       </div>
+
+      <button
+        onClick={() => navigate({ to: "/usage", search: { repoId: currentRepoId } })}
+        className="flex items-center gap-2 px-4 py-2 text-xs text-zinc-500 hover:text-zinc-300 hover:bg-zinc-800/50 transition-colors border-t border-zinc-800"
+      >
+        <BarChart3 size={13} />
+        Usage
+      </button>
 
       <button
         onClick={() => navigate({ to: "/settings" })}
