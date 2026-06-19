@@ -145,67 +145,75 @@ export function registerWorktreeRoutes(app: FastifyInstance) {
     if (!ticket.worktreePath)
       return reply.status(404).send({ error: "NO_WORKTREE", message: "No worktree exists for this ticket" });
 
-    // 1. Stop any active opencode session
-    const [activeSession] = await db
-      .select()
-      .from(schema.sessions)
-      .where(eq(schema.sessions.ticketId, ticketId))
-      .limit(1);
-    if (activeSession) {
-      stopSessionServer(activeSession.id);
-      await db
-        .update(schema.sessions)
-        .set({ exitCode: 0, exitReason: "user_stopped", endedAt: Date.now() })
-        .where(eq(schema.sessions.id, activeSession.id));
-      await db
-        .update(schema.tickets)
-        .set({ activeSessionId: null, updatedAt: Date.now() })
-        .where(eq(schema.tickets.id, ticketId));
-    }
+    await removeWorktreeForTicket(ticketId);
+    return reply.status(204).send();
+  });
+}
 
-    // 2. Remove the git worktree
-    const [repo] = await db
-      .select()
-      .from(schema.repos)
-      .where(eq(schema.repos.id, ticket.repoId));
+/**
+ * Remove the git worktree and branch for a ticket, then clear worktreePath.
+ * Safe to call even if the ticket has no worktree (no-op).
+ */
+export async function removeWorktreeForTicket(ticketId: string): Promise<void> {
+  const [ticket] = await db
+    .select()
+    .from(schema.tickets)
+    .where(eq(schema.tickets.id, ticketId));
+  if (!ticket || !ticket.worktreePath) return;
 
-    if (repo && existsSync(repo.localPath)) {
+  // 1. Stop any active opencode session
+  const [activeSession] = await db
+    .select()
+    .from(schema.sessions)
+    .where(eq(schema.sessions.ticketId, ticketId))
+    .limit(1);
+  if (activeSession) {
+    stopSessionServer(activeSession.id);
+    await db
+      .update(schema.sessions)
+      .set({ exitCode: 0, exitReason: "user_stopped", endedAt: Date.now() })
+      .where(eq(schema.sessions.id, activeSession.id));
+    await db
+      .update(schema.tickets)
+      .set({ activeSessionId: null, updatedAt: Date.now() })
+      .where(eq(schema.tickets.id, ticketId));
+  }
+
+  // 2. Remove the git worktree
+  const [repo] = await db
+    .select()
+    .from(schema.repos)
+    .where(eq(schema.repos.id, ticket.repoId));
+
+  if (repo && existsSync(repo.localPath)) {
+    try {
+      execSync(
+        `git -C "${repo.localPath}" worktree remove "${ticket.worktreePath}" 2>/dev/null || rm -rf "${ticket.worktreePath}"`,
+        { timeout: 15000, stdio: "pipe" },
+      );
+    } catch {
       try {
         execSync(
-          `git -C "${repo.localPath}" worktree remove "${ticket.worktreePath}" 2>/dev/null || rm -rf "${ticket.worktreePath}"`,
+          `git -C "${repo.localPath}" worktree remove --force "${ticket.worktreePath}" 2>/dev/null; rm -rf "${ticket.worktreePath}"`,
           { timeout: 15000, stdio: "pipe" },
         );
       } catch {
-        // Force remove if normal remove fails
-        try {
-          execSync(
-            `git -C "${repo.localPath}" worktree remove --force "${ticket.worktreePath}" 2>/dev/null; rm -rf "${ticket.worktreePath}"`,
-            { timeout: 15000, stdio: "pipe" },
-          );
-        } catch {
-          // Last resort: just delete the directory
-          execSync(`rm -rf "${ticket.worktreePath}"`, { timeout: 10000 });
-        }
-      }
-
-      // 3. Delete the branch
-      try {
-        execSync(
-          `git -C "${repo.localPath}" branch -D "${ticket.branch}" 2>/dev/null || true`,
-          { timeout: 10000, stdio: "pipe" },
-        );
-      } catch {
-        // branch may already be deleted
+        execSync(`rm -rf "${ticket.worktreePath}"`, { timeout: 10000 });
       }
     }
 
-    // 4. Clear worktreePath on the ticket
-    await db
-      .update(schema.tickets)
-      .set({ worktreePath: null, updatedAt: Date.now() })
-      .where(eq(schema.tickets.id, ticketId));
+    // 3. Delete the branch
+    try {
+      execSync(
+        `git -C "${repo.localPath}" branch -D "${ticket.branch}" 2>/dev/null || true`,
+        { timeout: 10000, stdio: "pipe" },
+      );
+    } catch {}
+  }
 
-    app.log.info({ ticketId, branch: ticket.branch }, "Worktree removed");
-    return reply.status(204).send();
-  });
+  // 4. Clear worktreePath on the ticket
+  await db
+    .update(schema.tickets)
+    .set({ worktreePath: null, updatedAt: Date.now() })
+    .where(eq(schema.tickets.id, ticketId));
 }

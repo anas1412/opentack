@@ -13,6 +13,7 @@ import {
   fetchOpencodeSessionCost,
 } from "./cost-utils";
 import { startSessionServer, stopSessionServer } from "../opencode-manager";
+import { removeWorktreeForTicket } from "./worktree";
 import { emitSse } from "../sse";
 import { z } from "zod";
 
@@ -205,6 +206,14 @@ export function registerTicketRoutes(app: FastifyInstance) {
     if (input.status === "resolved") update.resolvedAt = Date.now();
 
     await db.update(schema.tickets).set(update).where(eq(schema.tickets.id, id));
+
+    // Clean up worktree + branch when ticket is resolved or closed
+    if (input.status === "resolved" || input.status === "closed") {
+      const existingRows = existing[0];
+      if (existingRows.worktreePath) {
+        removeWorktreeForTicket(id).catch(() => {});
+      }
+    }
 
     // Rename any associated opencode sessions to match the new ticket title
     if (input.title !== undefined) {
