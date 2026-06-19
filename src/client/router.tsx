@@ -1,4 +1,4 @@
-import { useMemo } from "react";
+import { useMemo, useState } from "react";
 import {
   createRootRoute,
   createRoute,
@@ -7,11 +7,13 @@ import {
   Link,
   useSearch,
   useLocation,
+  useNavigate,
 } from "@tanstack/react-router";
 import { z } from "zod";
 import { useAppStore } from "./store/app";
 import { useRepos } from "./hooks/useRepos";
-import { Plus, List, Columns, LayoutDashboard, BookText } from "lucide-react";
+import { createChat } from "./api/chats";
+import { Plus, List, Columns, LayoutDashboard, BookText, MessageSquare, GitBranch, Loader2 } from "lucide-react";
 import Sidebar from "./components/Sidebar";
 import Dashboard from "./components/Dashboard";
 import TicketList from "./components/TicketList";
@@ -21,6 +23,7 @@ import UsagePage from "./components/UsagePage";
 import SplitView from "./components/SplitView";
 import TicketCreate from "./components/TicketCreate";
 import JournalView from "./components/JournalView";
+import ChatView from "./components/ChatView";
 
 // ─── Search param schema ─────────────────────────────────────────────
 
@@ -49,8 +52,24 @@ function RootLayout() {
 function ContentLayout() {
   const { pathname } = useLocation();
   const search = useSearch({ strict: false }) as { repoId?: string };
-  const { setCreateOpen } = useAppStore();
+  const navigate = useNavigate();
+  const { setCreateOpen, setSelectedRepoId } = useAppStore();
   const { data: repos } = useRepos();
+  const [chatRepoOpen, setChatRepoOpen] = useState(false);
+  const [creatingChat, setCreatingChat] = useState(false);
+
+  const handleNewChat = () => {
+    if (!repos || repos.length === 0) return;
+    const repoId = search.repoId || (repos.length === 1 ? repos[0].id : null);
+    if (repoId) {
+      setCreatingChat(true);
+      createChat(repoId).then((chat) => {
+        navigate({ to: `/chat/${chat.id}` });
+      }).catch(() => {}).finally(() => setCreatingChat(false));
+    } else {
+      setChatRepoOpen(true);
+    }
+  };
 
   const repoName = useMemo(
     () =>
@@ -129,14 +148,60 @@ function ContentLayout() {
           </div>
         </div>
 
-        <button
-          onClick={() => setCreateOpen(true)}
-          className="btn-primary shrink-0"
-        >
-          <Plus size={14} />
-          New ticket
-        </button>
+        <div className="flex items-center gap-2">
+          <button
+            onClick={handleNewChat}
+            disabled={creatingChat}
+            className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium text-zinc-300 bg-zinc-800 hover:bg-zinc-700 disabled:opacity-50 disabled:cursor-not-allowed transition-colors shrink-0"
+          >
+            {creatingChat ? <Loader2 size={14} className="animate-spin" /> : <MessageSquare size={14} />}
+            {creatingChat ? "Starting..." : "New Chat"}
+          </button>
+          <button
+            onClick={() => {
+              if (search.repoId) setSelectedRepoId(search.repoId);
+              setCreateOpen(true);
+            }}
+            className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium text-white transition-all duration-150 shrink-0 bg-[var(--accent)] hover:bg-[var(--accent-hover)]"
+            style={{ boxShadow: '0 0 12px rgba(var(--accent-glow-rgb), 0.12)' }}
+          >
+            <Plus size={14} />
+            New ticket
+          </button>
+        </div>
       </header>
+
+      {/* Repo picker for new chat */}
+      {chatRepoOpen && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60">
+          <div className="bg-zinc-900 border border-zinc-700 rounded-xl p-4 w-80 shadow-2xl">
+            <h3 className="text-sm font-medium text-zinc-200 mb-3">Start chat in...</h3>
+            <div className="space-y-1">
+              {repos?.map((repo) => (
+                <button
+                  key={repo.id}
+                  onClick={() => {
+                    setChatRepoOpen(false);
+                    createChat(repo.id).then((chat) => {
+                      navigate({ to: `/chat/${chat.id}` });
+                    }).catch(() => {});
+                  }}
+                  className="w-full flex items-center gap-2 px-3 py-2 rounded-lg text-sm text-zinc-300 hover:bg-zinc-800 transition-colors text-left"
+                >
+                  <GitBranch size={14} className="shrink-0 text-zinc-500" />
+                  <span className="truncate">{repo.name}</span>
+                </button>
+              ))}
+            </div>
+            <button
+              onClick={() => setChatRepoOpen(false)}
+              className="mt-3 w-full px-3 py-1.5 text-xs text-zinc-500 hover:text-zinc-300 transition-colors"
+            >
+              Cancel
+            </button>
+          </div>
+        </div>
+      )}
 
       <div className="flex-1 overflow-auto p-6">
         <Outlet />
@@ -204,6 +269,12 @@ const ticketRoute = createRoute({
   component: SplitView,
 });
 
+const chatRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: "/chat/$chatId",
+  component: ChatView,
+});
+
 // ─── Route Tree & Router ────────────────────────────────────────────
 
 const routeTree = rootRoute.addChildren([
@@ -211,11 +282,12 @@ const routeTree = rootRoute.addChildren([
   settingsRoute,
   usageRoute,
   ticketRoute,
+  chatRoute,
 ]);
 
 const router = createRouter({ routeTree });
 
-export { router, indexRoute, listRoute, boardRoute, journalRoute, ticketRoute, usageRoute };
+export { router, indexRoute, listRoute, boardRoute, journalRoute, ticketRoute, usageRoute, chatRoute };
 
 // ─── Type augmentation for type-safe router usage ────────────────────
 

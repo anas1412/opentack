@@ -50,6 +50,13 @@
       "when": 1781861463110,
       "tag": "0006_plain_mephistopheles",
       "breakpoints": true
+    },
+    {
+      "idx": 7,
+      "version": "6",
+      "when": 1781897025350,
+      "tag": "0007_violet_blink",
+      "breakpoints": true
     }
   ]
 }

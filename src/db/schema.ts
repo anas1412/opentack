@@ -55,7 +55,7 @@ export type ExitReason = (typeof exitReasons)[number];
 
 export const sessions = sqliteTable("session", {
   id: text("id").primaryKey(),
-  ticketId: text("ticket_id").notNull(),
+  ticketId: text("ticket_id"),
 
   opencodeVersion: text("opencode_version").notNull(),
   model: text("model").notNull(),

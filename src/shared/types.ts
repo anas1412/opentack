@@ -62,7 +62,7 @@ export interface FileDiff {
 
 export interface Session {
   id: string;
-  ticketId: string;
+  ticketId: string | null;
   opencodeVersion: string;
   model: string;
   cwd: string;

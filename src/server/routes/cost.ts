@@ -178,7 +178,9 @@ export function registerCostRoutes(app: FastifyInstance) {
         models: Map<string, { model: string; tokens: number; cost: number; sessionCount: number }>;
       }>();
 
-      for (const row of rows) {
+      // Filter out chat sessions (no ticketId) — INNER JOIN already excludes them but TS needs help
+      const ticketRows = rows.filter((r): r is typeof r & { ticketId: string } => r.ticketId !== null);
+      for (const row of ticketRows) {
         let entry = ticketMap.get(row.ticketId);
         if (!entry) {
           entry = {

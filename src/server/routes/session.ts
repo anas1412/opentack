@@ -1,5 +1,5 @@
 import type { FastifyInstance } from "fastify";
-import { and, desc, eq } from "drizzle-orm";
+import { and, desc, eq, isNotNull } from "drizzle-orm";
 import { z } from "zod";
 import { readFileSync, existsSync } from "fs";
 import { execSync } from "child_process";
@@ -186,8 +186,8 @@ export function registerSessionRoutes(app: FastifyInstance) {
       repoId: z.string().uuid().optional(),
     }).parse(req.query);
 
-    // Build the query — join sessions with tickets (+ repos) for metadata
-    const conditions = [];
+    // Build the query — only ticket sessions (exclude chats), join with tickets (+ repos) for metadata
+    const conditions = [isNotNull(schema.sessions.ticketId)];
     if (query.repoId) conditions.push(eq(schema.tickets.repoId, query.repoId));
 
     const rows = await db
@@ -488,6 +488,8 @@ export function registerSessionRoutes(app: FastifyInstance) {
     if (!session)
       return reply.status(404).send({ error: "NOT_FOUND", message: "Session not found" });
 
+    if (!session.ticketId)
+      return reply.status(400).send({ error: "NO_TICKET", message: "Session has no associated ticket" });
     const [ticket] = await db
       .select()
       .from(schema.tickets)
@@ -608,10 +610,12 @@ export function registerSessionRoutes(app: FastifyInstance) {
       .where(eq(schema.sessions.id, id));
 
     // Clear ticket's activeSessionId so sidebar updates and auto-resume is clean
-    await db
-      .update(schema.tickets)
-      .set({ activeSessionId: null, updatedAt: Date.now() })
-      .where(eq(schema.tickets.id, session.ticketId));
+    if (session.ticketId) {
+      await db
+        .update(schema.tickets)
+        .set({ activeSessionId: null, updatedAt: Date.now() })
+        .where(eq(schema.tickets.id, session.ticketId));
+    }
 
     // Kill the per-session opencode serve process (free port)
     stopSessionServer(id);

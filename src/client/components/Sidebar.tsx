@@ -1,11 +1,12 @@
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { useNavigate, useSearch } from "@tanstack/react-router";
 import { useAppStore } from "../store/app";
 import { useRepos, useDeleteRepo } from "../hooks/useRepos";
 import { useTickets } from "../hooks/useTickets";
 import { useCostSummary } from "../hooks/useCostSummary";
+import { fetchChats, createChat, type ChatSession } from "../api/chats";
 import AddRepoModal from "./AddRepoModal";
-import { GitBranch, FolderPlus, Trash2, Layers, ArrowRight, Settings2, Pin, Plus, BarChart3 } from "lucide-react";
+import { GitBranch, FolderPlus, Trash2, Layers, ArrowRight, Settings2, Pin, Plus, BarChart3, MessageSquare, Loader2 } from "lucide-react";
 
 function useUrlRepoId(): string | undefined {
   const search = useSearch({ strict: false }) as Record<string, unknown>;
@@ -15,15 +16,41 @@ function useUrlRepoId(): string | undefined {
 export default function Sidebar() {
   const navigate = useNavigate();
   const currentRepoId = useUrlRepoId();
-  const { setCreateOpen } = useAppStore();
+  const { setCreateOpen, setSelectedRepoId } = useAppStore();
   const { data: repos } = useRepos();
   const { data: ticketsData } = useTickets();
   const { data: costs } = useCostSummary();
   const deleteRepo = useDeleteRepo();
   const [addRepoOpen, setAddRepoOpen] = useState(false);
+  const [activeChats, setActiveChats] = useState<ChatSession[]>([]);
+  const [chatRepoModal, setChatRepoModal] = useState(false);
+  const [creatingChat, setCreatingChat] = useState(false);
+
+  // Poll active chats
+  useEffect(() => {
+    let active = true;
+    const poll = () =>
+      fetchChats().then((list) => { if (active) setActiveChats(list); }).catch(() => {});
+    poll();
+    const interval = setInterval(poll, 5000);
+    return () => { active = false; clearInterval(interval); };
+  }, []);
 
   const activeTickets =
     ticketsData?.tickets?.filter((t) => t.activeSessionId !== null) ?? [];
+
+  const handleNewChat = () => {
+    if (!repos || repos.length === 0) return;
+    const repoId = currentRepoId || (repos.length === 1 ? repos[0].id : null);
+    if (repoId) {
+      setCreatingChat(true);
+      createChat(repoId).then((chat) => {
+        navigate({ to: `/chat/${chat.id}` });
+      }).catch(() => {}).finally(() => setCreatingChat(false));
+    } else {
+      setChatRepoModal(true);
+    }
+  };
 
   return (
     <aside className="w-[220px] min-w-[220px] border-r border-zinc-800/60 flex flex-col bg-zinc-950 relative">
@@ -41,13 +68,49 @@ export default function Sidebar() {
 
       {/* Active sessions section — scrollable */}
       <div className="flex-1 px-2 space-y-0.5 overflow-auto min-h-0">
+        {/* Active Chats */}
         <div className="flex items-center justify-between px-2 py-2">
           <p className="text-xs font-medium text-zinc-500 uppercase tracking-wider flex items-center gap-1.5">
-            <span className="w-1 h-1 rounded-full" style={{ backgroundColor: 'var(--accent)' }} />
-            Active
+            <span className="w-1 h-1 rounded-full bg-blue-400" />
+            Active Chats
           </p>
           <button
-            onClick={() => setCreateOpen(true)}
+            onClick={handleNewChat}
+            disabled={creatingChat}
+            className="p-1 rounded text-zinc-500 hover:text-zinc-300 hover:bg-zinc-800 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
+            title="New chat"
+          >
+            {creatingChat ? <Loader2 size={14} className="animate-spin" /> : <Plus size={14} />}
+          </button>
+        </div>
+        {activeChats.map((chat) => (
+          <button
+            key={chat.id}
+            onClick={() => navigate({ to: `/chat/${chat.id}` })}
+            className="w-full flex items-center gap-2 px-3 py-1.5 text-sm text-zinc-400 hover:text-zinc-200 hover:bg-zinc-800/50 rounded-md transition-colors text-left"
+          >
+            <span className="w-1.5 h-1.5 rounded-full shrink-0 bg-blue-400" />
+            <span className="truncate flex-1 min-w-0 text-left font-mono">
+              chat · {chat.cwd?.split("/").pop() ?? chat.id.slice(0, 8)}
+            </span>
+            <ArrowRight size={12} className="shrink-0 text-zinc-600" />
+          </button>
+        ))}
+        {activeChats.length === 0 && (
+          <p className="px-3 py-1.5 text-xs text-zinc-600 italic">None running</p>
+        )}
+
+        {/* Active Tickets */}
+        <div className="flex items-center justify-between px-2 py-2 mt-1">
+          <p className="text-xs font-medium text-zinc-500 uppercase tracking-wider flex items-center gap-1.5">
+            <span className="w-1 h-1 rounded-full" style={{ backgroundColor: 'var(--accent)' }} />
+            Active Tickets
+          </p>
+          <button
+            onClick={() => {
+              if (currentRepoId) setSelectedRepoId(currentRepoId);
+              setCreateOpen(true);
+            }}
             className="p-1 rounded text-zinc-500 hover:text-zinc-300 hover:bg-zinc-800 transition-colors"
             title="New ticket"
           >
@@ -167,6 +230,38 @@ export default function Sidebar() {
       </button>
 
       <AddRepoModal open={addRepoOpen} onClose={() => setAddRepoOpen(false)} />
+
+      {/* Repo picker for new chat (when multiple repos) */}
+      {chatRepoModal && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60">
+          <div className="bg-zinc-900 border border-zinc-700 rounded-xl p-4 w-80 shadow-2xl">
+            <h3 className="text-sm font-medium text-zinc-200 mb-3">Start chat in...</h3>
+            <div className="space-y-1">
+              {repos?.map((repo) => (
+                <button
+                  key={repo.id}
+                  onClick={() => {
+                    setChatRepoModal(false);
+                    createChat(repo.id).then((chat) => {
+                      navigate({ to: `/chat/${chat.id}` });
+                    }).catch(() => {});
+                  }}
+                  className="w-full flex items-center gap-2 px-3 py-2 rounded-lg text-sm text-zinc-300 hover:bg-zinc-800 transition-colors text-left"
+                >
+                  <GitBranch size={14} className="shrink-0 text-zinc-500" />
+                  <span className="truncate">{repo.name}</span>
+                </button>
+              ))}
+            </div>
+            <button
+              onClick={() => setChatRepoModal(false)}
+              className="mt-3 w-full px-3 py-1.5 text-xs text-zinc-500 hover:text-zinc-300 transition-colors"
+            >
+              Cancel
+            </button>
+          </div>
+        </div>
+      )}
     </aside>
   );
 }

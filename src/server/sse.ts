@@ -1,11 +1,11 @@
 import { EventEmitter } from "events";
 
 export type SseEvent =
-  | { type: "session.started"; sessionId: string; ticketId: string }
-  | { type: "session.stopped"; sessionId: string; ticketId: string }
-  | { type: "session.ended"; sessionId: string; ticketId: string; exitCode: number | null }
-  | { type: "session.cost"; sessionId: string; ticketId: string; costUsd: number; tokens: number }
-  | { type: "session.improving_done"; sessionId: string; ticketId: string }
+  | { type: "session.started"; sessionId: string; ticketId: string | null }
+  | { type: "session.stopped"; sessionId: string; ticketId: string | null }
+  | { type: "session.ended"; sessionId: string; ticketId: string | null; exitCode: number | null }
+  | { type: "session.cost"; sessionId: string; ticketId: string | null; costUsd: number; tokens: number }
+  | { type: "session.improving_done"; sessionId: string; ticketId: string | null }
   | { type: "ticket.created"; ticketId: string }
   | { type: "ticket.updated"; ticketId: string }
   | { type: "ticket.deleted"; ticketId: string }

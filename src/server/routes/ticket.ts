@@ -128,9 +128,10 @@ export function registerTicketRoutes(app: FastifyInstance) {
         }
       }
 
-      // Sum costs per ticket
+      // Sum costs per ticket (skip chat sessions with no ticketId)
       const costByTicket = new Map<string, { costUsd: number; totalTokens: number }>();
       for (const s of allSessions) {
+        if (!s.ticketId) continue;
         const oc = s.opencodeSessionId ? ocCostMap.get(s.opencodeSessionId) : null;
         const costUsd = oc?.cost ?? s.costUsd;
         const totalTokens = oc?.tokens ?? s.totalTokens;

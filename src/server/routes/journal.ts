@@ -71,7 +71,7 @@ export function registerJournalRoutes(app: FastifyInstance) {
         continue;
       }
 
-      const ticketIds = [...new Set(sessions.map((s) => s.ticketId))];
+      const ticketIds = [...new Set(sessions.map((s) => s.ticketId).filter((id): id is string => id !== null))];
       const tickets = await db
         .select()
         .from(schema.tickets)
