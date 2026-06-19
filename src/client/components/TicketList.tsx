@@ -183,7 +183,9 @@ export default function TicketList({ repoId, search, status, priority, category 
               <th className="pb-3 pr-4 font-medium">Status</th>
               <th className="pb-3 pr-4 font-medium">Title</th>
               <th className="pb-3 pr-4 font-medium">Repo</th>
+              <th className="pb-3 pr-4 font-medium">Branch</th>
               <th className="pb-3 pr-4 font-medium">Category</th>
+              <th className="pb-3 pr-4 font-medium text-right">Tokens</th>
               <th className="pb-3 pr-4 font-medium text-right">Cost</th>
               <th className="pb-3 pr-2 font-medium text-right">Updated</th>
               <th className="pb-3 w-8" />
@@ -219,8 +221,14 @@ export default function TicketList({ repoId, search, status, priority, category 
                   <td className="py-3 pr-4 text-zinc-400">
                     {repoMap.get(ticket.repoId) ?? ticket.repoId.slice(0, 8)}
                   </td>
+                  <td className="py-3 pr-4 font-mono text-xs text-zinc-500 max-w-[140px] truncate">
+                    {ticket.branch}
+                  </td>
                   <td className={`py-3 pr-4 ${CATEGORY_COLORS[ticket.category]}`}>
                     {ticket.category}
+                  </td>
+                  <td className="py-3 pr-4 text-right font-mono text-zinc-400">
+                    {ticket.totalTokens.toLocaleString()}
                   </td>
                   <td className="py-3 pr-4 text-right font-mono text-zinc-300">
                     {formatCost(ticket.totalCostUsd)}

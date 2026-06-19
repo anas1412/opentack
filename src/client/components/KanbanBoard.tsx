@@ -2,6 +2,7 @@ import { useMemo, useState, useCallback } from "react";
 import { useNavigate } from "@tanstack/react-router";
 import { useTickets, useUpdateTicket } from "../hooks/useTickets";
 import { useRepos } from "../hooks/useRepos";
+import { GitBranch, Zap } from "lucide-react";
 import type { Ticket, TicketStatus } from "../../shared/types";
 
 const COLUMNS: { status: TicketStatus; label: string }[] = [
@@ -74,10 +75,21 @@ function TicketCard({
           {ticket.title}
         </p>
       </div>
+      {ticket.branch && (
+        <div className="flex items-center gap-1 text-xs text-zinc-500">
+          <GitBranch size={11} className="shrink-0" />
+          <span className="font-mono truncate max-w-[180px]">{ticket.branch}</span>
+        </div>
+      )}
       <div className="flex items-center gap-2 text-xs text-zinc-500">
         <span>{repoName}</span>
         <span className="text-zinc-700">·</span>
         <span className="font-mono">{formatCost(ticket.totalCostUsd)}</span>
+        <span className="text-zinc-700">·</span>
+        <span className="flex items-center gap-1">
+          <Zap size={11} className="text-zinc-600" />
+          <span className="font-mono">{ticket.totalTokens.toLocaleString()}</span>
+        </span>
       </div>
       <div className="flex items-center gap-1.5">
         <span className={`inline-block px-1.5 py-0.5 rounded text-[10px] font-medium leading-none ${CATEGORY_COLORS[ticket.category] || ""}`}>
