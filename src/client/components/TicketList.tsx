@@ -1,5 +1,5 @@
 import { useState, useCallback } from "react";
-import { useNavigate } from "@tanstack/react-router";
+import { useNavigate, useSearch } from "@tanstack/react-router";
 import { useTickets, useDeleteTicket, useBatchUpdateTickets, useBatchDeleteTickets } from "../hooks/useTickets";
 import { useRepos } from "../hooks/useRepos";
 import type { Ticket, TicketStatus } from "../../shared/types";
@@ -47,9 +47,11 @@ interface TicketListProps {
   category?: string;
 }
 
-export default function TicketList({ repoId, search, status, priority, category }: TicketListProps) {
+export default function TicketList(_props: TicketListProps) {
   const navigate = useNavigate();
-  const { data, isLoading, isError, error } = useTickets({ repoId, search, status, priority, category });
+  const search = useSearch({ strict: false }) as Record<string, unknown>;
+  const repoId = search.repoId as string | undefined;
+  const { data, isLoading, isError, error } = useTickets({ repoId });
   const { data: repos } = useRepos();
   const deleteTicket = useDeleteTicket();
   const batchUpdate = useBatchUpdateTickets();

@@ -1,5 +1,5 @@
 import type { FastifyInstance } from "fastify";
-import { and, sql, inArray, gte, lt, desc } from "drizzle-orm";
+import { and, sql, inArray, gte, lt, eq } from "drizzle-orm";
 import { z } from "zod";
 import { db, schema } from "../../db";
 
@@ -32,7 +32,18 @@ export function registerJournalRoutes(app: FastifyInstance) {
     const query = z.object({
       offset: z.coerce.number().int().min(0).default(0),
       limit: z.coerce.number().int().min(1).max(30).default(7),
+      repoId: z.string().optional(),
     }).parse(req.query);
+
+    // If filtering by repo, get matching ticket IDs once
+    let repoTicketIds: string[] | undefined;
+    if (query.repoId) {
+      const rows = await db
+        .select({ id: schema.tickets.id })
+        .from(schema.tickets)
+        .where(eq(schema.tickets.repoId, query.repoId));
+      repoTicketIds = rows.map((r) => r.id);
+    }
 
     const now = Date.now();
     const results: JournalDayResult[] = [];
@@ -42,15 +53,18 @@ export function registerJournalRoutes(app: FastifyInstance) {
       const dayStart = new Date(dateStr + "T00:00:00").getTime();
       const dayEnd = dayStart + DAY_MS;
 
+      const dayConditions: any[] = [
+        gte(schema.sessions.createdAt, dayStart),
+        sql`${schema.sessions.createdAt} < ${dayEnd}`,
+      ];
+      if (repoTicketIds) {
+        dayConditions.push(inArray(schema.sessions.ticketId, repoTicketIds));
+      }
+
       const sessions = await db
         .select()
         .from(schema.sessions)
-        .where(
-          and(
-            gte(schema.sessions.createdAt, dayStart),
-            sql`${schema.sessions.createdAt} < ${dayEnd}`,
-          ),
-        );
+        .where(and(...dayConditions));
 
       if (sessions.length === 0) {
         results.push({ date: dateStr, tickets: [] });
@@ -96,10 +110,16 @@ export function registerJournalRoutes(app: FastifyInstance) {
     let hasMore = false;
     if (lastDate) {
       const lastDayStart = new Date(lastDate + "T00:00:00").getTime();
+      const hasMoreConditions: any[] = [
+        lt(schema.sessions.createdAt, lastDayStart),
+      ];
+      if (repoTicketIds) {
+        hasMoreConditions.push(inArray(schema.sessions.ticketId, repoTicketIds));
+      }
       const [oldest] = await db
         .select({ count: sql<number>`count(*)` })
         .from(schema.sessions)
-        .where(lt(schema.sessions.createdAt, lastDayStart));
+        .where(and(...hasMoreConditions));
       hasMore = (oldest?.count ?? 0) > 0;
     }
 

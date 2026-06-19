@@ -1,7 +1,7 @@
 import { useState, useEffect, useCallback } from "react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
-import { useNavigate } from "@tanstack/react-router";
+import { useNavigate, useSearch } from "@tanstack/react-router";
 import { useJournal } from "../hooks/useJournal";
 import { Calendar, FileCode, BookText, ChevronDown, ChevronRight, RefreshCw } from "lucide-react";
 import type { TicketDayInfo, JournalDayResult } from "../../shared/types";
@@ -30,7 +30,9 @@ export default function JournalView() {
   const [expanded, setExpanded] = useState<Set<string>>(new Set());
   const [allDays, setAllDays] = useState<JournalDayResult[]>([]);
   const [hasMore, setHasMore] = useState(false);
-  const { data, isLoading, isError, isFetching } = useJournal(offset, 7);
+  const search = useSearch({ strict: false }) as Record<string, unknown>;
+  const repoId = search.repoId as string | undefined;
+  const { data, isLoading, isError, isFetching } = useJournal(offset, 7, repoId);
 
   // Accumulate days when new data arrives
   useEffect(() => {

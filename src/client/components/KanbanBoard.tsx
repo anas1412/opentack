@@ -1,5 +1,5 @@
 import { useMemo, useState, useCallback } from "react";
-import { useNavigate } from "@tanstack/react-router";
+import { useNavigate, useSearch } from "@tanstack/react-router";
 import { useTickets, useUpdateTicket } from "../hooks/useTickets";
 import { useRepos } from "../hooks/useRepos";
 import { GitBranch, Zap } from "lucide-react";
@@ -110,9 +110,11 @@ interface KanbanBoardProps {
   category?: string;
 }
 
-export default function KanbanBoard({ repoId, search, status, priority, category }: KanbanBoardProps) {
+export default function KanbanBoard(_props: KanbanBoardProps) {
   const navigate = useNavigate();
-  const { data, isLoading, isError } = useTickets({ repoId, search, status, priority, category });
+  const search = useSearch({ strict: false }) as Record<string, unknown>;
+  const repoId = search.repoId as string | undefined;
+  const { data, isLoading, isError } = useTickets({ repoId });
   const { data: repos } = useRepos();
   const updateTicket = useUpdateTicket();
   const [dragOverCol, setDragOverCol] = useState<string | null>(null);
