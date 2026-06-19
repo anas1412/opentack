@@ -158,7 +158,7 @@ function ContentLayout() {
             style={{ boxShadow: '0 0 12px rgba(var(--accent-glow-rgb), 0.12)' }}
           >
             <Plus size={14} />
-            New ticket
+            New Ticket
           </button>
         </div>
       </header>

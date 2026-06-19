@@ -112,7 +112,7 @@ export default function Sidebar() {
               setCreateOpen(true);
             }}
             className="p-1 rounded text-zinc-500 hover:text-zinc-300 hover:bg-zinc-800 transition-colors"
-            title="New ticket"
+            title="New Ticket"
           >
             <Plus size={14} />
           </button>
