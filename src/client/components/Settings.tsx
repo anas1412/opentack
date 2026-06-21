@@ -197,12 +197,12 @@ export default function Settings() {
     if (settings) {
       setForward(settings.forwardDescription);
       setLocalTheme(settings.theme);
+      setModel(settings.model || "");
     }
   }, [settings]);
 
   useEffect(() => {
     if (opencodeCfg) {
-      setModel(opencodeCfg.model || "");
       setDefaultAgent(opencodeCfg.default_agent || "build");
     }
   }, [opencodeCfg]);
@@ -223,9 +223,9 @@ export default function Settings() {
   });
 
   const saveModel = useMutation({
-    mutationFn: (input: { model: string }) => updateOpencodeConfig(input),
+    mutationFn: (input: { model: string }) => updateSettings(input),
     onSuccess: () => {
-      qc.invalidateQueries({ queryKey: ["opencode-config"] });
+      qc.invalidateQueries({ queryKey: ["settings"] });
       setModelDirty(false);
     },
   });

@@ -1,0 +1,1 @@
+ALTER TABLE `settings` ADD `model` text DEFAULT 'opencode/big-pickle' NOT NULL;

@@ -34,6 +34,7 @@ export interface Ticket {
   totalTokens: number;
   tags: string[];
   notes: string;
+  worktreePath: string | null;
   createdAt: number;
   updatedAt: number;
   resolvedAt: number | null;
@@ -68,6 +69,7 @@ export interface Session {
   cwd: string;
   branch: string;
   initialPrompt: string;
+  opencodeSessionId: string | null;
   transcript: TranscriptEntry[];
   diff: FileDiff[];
   filesChanged: string[];
@@ -80,6 +82,8 @@ export interface Session {
   createdAt: number;
   endedAt: number | null;
   durationMs: number | null;
+  pid: number | null;
+  serverPort: number | null;
   approved: boolean | null;
   revisionNote: string | null;
 }
@@ -143,6 +147,15 @@ export interface CostSummary {
   weekTotalTokens: number;
   ticketCount: number;
   sessionCount: number;
+  overheadUsd: number;
+  overheadTokens: number;
+  perRepo: Array<{
+    repoId: string;
+    repoName: string;
+    usd: number;
+    tokens: number;
+    sessionCount: number;
+  }>;
 }
 
 // ─── Settings ──────────────────────────────────────────────────────────
@@ -153,6 +166,7 @@ export type Theme = (typeof THEMES)[number];
 export interface Settings {
   forwardDescription: boolean;
   theme: Theme;
+  model: string; // e.g. "opencode/big-pickle"
 }
 
 // ─── Journal ───────────────────────────────────────────

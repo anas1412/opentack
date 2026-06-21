@@ -110,6 +110,7 @@ export const settings = sqliteTable("settings", {
     .notNull()
     .default(true),
   theme: text("theme").notNull().default("amber"),
+  model: text("model").notNull().default("opencode/big-pickle"),
   updatedAt: integer("updated_at", { mode: "number" }).notNull(),
 });
 

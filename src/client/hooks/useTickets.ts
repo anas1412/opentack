@@ -99,6 +99,11 @@ export function useGenerateNotes() {
   return useMutation({
     mutationFn: (ticketId: string) => generateNotes(ticketId),
     onSuccess: (data, ticketId) => {
+      // Update cache immediately so notes show without waiting for refetch
+      qc.setQueryData(["ticket", ticketId], (old: any) => {
+        if (!old) return old;
+        return { ...old, notes: data.notes };
+      });
       qc.invalidateQueries({ queryKey: ["ticket", ticketId] });
       qc.invalidateQueries({ queryKey: ["tickets"] });
     },
