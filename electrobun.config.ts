@@ -15,7 +15,9 @@ export default {
     },
     // Copy Vite build output so it's served at views://mainview/
     copy: {
-      "dist/client/": "views/mainview/",
+      "dist/client": "views/mainview",
+      // DB migration files — referenced via ../../drizzle from app/bun/index.js
+      "drizzle": "drizzle",
     },
     mac: {
       icons: "assets/icon.icns",

@@ -5,6 +5,7 @@ import { ticketRoute } from "../router";
 import TicketDetail from "./TicketDetail";
 import GitToolbar from "./GitToolbar";
 import { ArrowLeft, Play, Square, ExternalLink, Loader2 } from "lucide-react";
+import { request } from "../api/rpc-client";
 import { createTicketSession, fetchTicket, improveSessionPrompt } from "../api/tickets";
 
 type SessionPhase = "idle" | "starting" | "active" | "stopped" | "error";
@@ -91,8 +92,7 @@ export default function SplitView() {
     if (!sessionId) { setCurrentBranch(null); return; }
     let active = true;
     const fetchBranch = () =>
-      fetch(`/api/sessions/${sessionId}/branch`)
-        .then((r) => r.json())
+      request("sessionBranch", { id: sessionId })
         .then((data) => { if (active) setCurrentBranch(data.branch ?? null); })
         .catch(() => {});
     fetchBranch();
@@ -118,19 +118,7 @@ export default function SplitView() {
       if (session.forwardEnabled) {
         setOverlayText("creating your prompt");
         await improveSessionPrompt(session.id);
-        // Wait for session.improving_done SSE event (or 30s timeout fallback)
-        await new Promise<void>((resolve) => {
-          const es = new EventSource("/events");
-          const timer = setTimeout(() => { es.close(); resolve(); }, 30000);
-          es.addEventListener("session.improving_done", (e: MessageEvent) => {
-            const data = JSON.parse(e.data);
-            if (data.sessionId === session.id) {
-              clearTimeout(timer);
-              es.close();
-              resolve();
-            }
-          });
-        });
+        // RPC response already signals completion — no need for separate event
       }
 
       setOverlayText(null);
@@ -145,7 +133,7 @@ export default function SplitView() {
   const handleStopSession = useCallback(async () => {
     if (!sessionId) return;
     try {
-      await fetch(`/api/sessions/${sessionId}/stop`, { method: "POST" });
+      await request("stopSession", { id: sessionId });
     } catch {
       // ignore
     }
@@ -161,7 +149,7 @@ export default function SplitView() {
   const handleWorktreeCreated = useCallback(async () => {
     if (sessionId) {
       try {
-        await fetch(`/api/sessions/${sessionId}/stop`, { method: "POST" });
+        await request("stopSession", { id: sessionId });
       } catch {}
     }
     // Clear stale state so handleStartSession sees "idle"

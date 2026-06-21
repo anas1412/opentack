@@ -1,101 +1,102 @@
-import { useEffect } from "react";
-import { useQueryClient } from "@tanstack/react-query";
+import { useEffect } from "react"
+import { useQueryClient } from "@tanstack/react-query"
+import { onMessage } from "../api/rpc-client"
 
 type SessionRow = {
-  id: string;
-  exitCode: number | null;
-  endedAt: number | null;
-  totalTokens: number;
-  costUsd: number;
-  [key: string]: unknown;
-};
+  id: string
+  exitCode: number | null
+  endedAt: number | null
+  totalTokens: number
+  costUsd: number
+  [key: string]: unknown
+}
 
 /**
- * Singleton SSE connection that patches React Query caches directly on push events.
- * Eliminates client-side polling for ticket list, session data, and recent sessions.
+ * RPC message listener that patches React Query caches directly on push events.
+ * Replaces the old SSE connection.
  *
- * Call once at app root (under QueryClientProvider). Reconnection is handled
- * automatically by the browser EventSource API.
+ * Call once at app root (under QueryClientProvider).
  */
 export function useSse() {
-  const queryClient = useQueryClient();
+  const queryClient = useQueryClient()
 
   useEffect(() => {
-    const es = new EventSource("/events");
+    const unsubs: (() => void)[] = []
 
-    es.addEventListener("session.cost", (e: MessageEvent) => {
-      const { sessionId, ticketId, costUsd, tokens } = JSON.parse(e.data) as {
-        sessionId: string;
-        ticketId: string;
-        costUsd: number;
-        tokens: number;
-      };
+    unsubs.push(
+      onMessage("sessionCost", ({ sessionId, ticketId, costUsd, tokens }) => {
+        if (!ticketId) return
+        // Patch the ticket's session cache with latest cost/tokens (no refetch)
+        queryClient.setQueryData<SessionRow[]>(
+          ["ticket", ticketId, "sessions"],
+          (old) =>
+            old?.map((s) =>
+              s.id === sessionId
+                ? { ...s, totalTokens: tokens, costUsd }
+                : s,
+            ),
+        )
 
-      // Patch the ticket's session cache with latest cost/tokens (no refetch)
-      queryClient.setQueryData<SessionRow[]>(
-        ["ticket", ticketId, "sessions"],
-        (old) =>
-          old?.map((s) =>
-            s.id === sessionId
-              ? { ...s, totalTokens: tokens, costUsd }
-              : s,
-          ),
-      );
+        // Refresh recent sessions (costs changed)
+        queryClient.invalidateQueries({ queryKey: ["sessions", "recent"] })
+        // Refresh ticket detail (files changed may have updated)
+        queryClient.invalidateQueries({ queryKey: ["ticket", ticketId] })
+      }),
+    )
 
-      // Refresh recent sessions (costs changed)
-      queryClient.invalidateQueries({ queryKey: ["sessions", "recent"] });
-      // Refresh ticket detail (files changed may have updated)
-      queryClient.invalidateQueries({ queryKey: ["ticket", ticketId] });
-    });
+    unsubs.push(
+      onMessage("sessionStopped", ({ sessionId, ticketId }) => {
+        if (!ticketId) return
+        // Mark session inactive in cache
+        queryClient.setQueryData<SessionRow[]>(
+          ["ticket", ticketId, "sessions"],
+          (old) =>
+            old?.map((s) =>
+              s.id === sessionId
+                ? { ...s, exitCode: 0, endedAt: Date.now() }
+                : s,
+            ),
+        )
 
-    es.addEventListener("session.stopped", (e: MessageEvent) => {
-      const { sessionId, ticketId } = JSON.parse(e.data) as {
-        sessionId: string;
-        ticketId: string;
-      };
+        // Refresh ticket list (active session changed)
+        queryClient.invalidateQueries({ queryKey: ["tickets"] })
+        queryClient.invalidateQueries({ queryKey: ["sessions", "recent"] })
+        // Refresh ticket detail (files changed may have updated)
+        queryClient.invalidateQueries({ queryKey: ["ticket", ticketId] })
+      }),
+    )
 
-      // Mark session inactive in cache
-      queryClient.setQueryData<SessionRow[]>(
-        ["ticket", ticketId, "sessions"],
-        (old) =>
-          old?.map((s) =>
-            s.id === sessionId
-              ? { ...s, exitCode: 0, endedAt: Date.now() }
-              : s,
-          ),
-      );
+    unsubs.push(
+      onMessage("sessionStarted", ({ ticketId }) => {
+        queryClient.invalidateQueries({ queryKey: ["tickets"] })
+        queryClient.invalidateQueries({ queryKey: ["sessions", "recent"] })
+        if (ticketId) {
+          queryClient.invalidateQueries({ queryKey: ["ticket", ticketId] })
+        }
+      }),
+    )
 
-      // Refresh ticket list (active session changed)
-      queryClient.invalidateQueries({ queryKey: ["tickets"] });
-      queryClient.invalidateQueries({ queryKey: ["sessions", "recent"] });
-      // Refresh ticket detail (files changed may have updated)
-      queryClient.invalidateQueries({ queryKey: ["ticket", ticketId] });
-    });
+    unsubs.push(
+      onMessage("ticketCreated", () => {
+        queryClient.invalidateQueries({ queryKey: ["tickets"] })
+      }),
+    )
 
-    es.addEventListener("session.started", (e: MessageEvent) => {
-      const { ticketId } = JSON.parse(e.data) as { ticketId: string };
-      queryClient.invalidateQueries({ queryKey: ["tickets"] });
-      queryClient.invalidateQueries({ queryKey: ["sessions", "recent"] });
-      // Refresh ticket detail (files changed may have updated)
-      queryClient.invalidateQueries({ queryKey: ["ticket", ticketId] });
-    });
+    unsubs.push(
+      onMessage("ticketUpdated", ({ ticketId }) => {
+        queryClient.invalidateQueries({ queryKey: ["tickets"] })
+        queryClient.invalidateQueries({ queryKey: ["ticket", ticketId] })
+      }),
+    )
 
-    es.addEventListener("ticket.created", () => {
-      queryClient.invalidateQueries({ queryKey: ["tickets"] });
-    });
-
-    es.addEventListener("ticket.updated", (e: MessageEvent) => {
-      const { ticketId } = JSON.parse(e.data) as { ticketId: string };
-      queryClient.invalidateQueries({ queryKey: ["tickets"] });
-      queryClient.invalidateQueries({ queryKey: ["ticket", ticketId] });
-    });
-
-    es.addEventListener("ticket.deleted", () => {
-      queryClient.invalidateQueries({ queryKey: ["tickets"] });
-    });
+    unsubs.push(
+      onMessage("ticketDeleted", () => {
+        queryClient.invalidateQueries({ queryKey: ["tickets"] })
+      }),
+    )
 
     return () => {
-      es.close();
-    };
-  }, [queryClient]);
+      for (const unsub of unsubs) unsub()
+    }
+  }, [queryClient])
 }

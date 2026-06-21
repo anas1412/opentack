@@ -1,13 +1,10 @@
-import { apiFetch } from "./client";
-import type { Settings } from "../../shared/types";
+import { request } from "./rpc-client"
+import type { Settings } from "../../shared/types"
 
 export function fetchSettings(): Promise<Settings> {
-  return apiFetch<Settings>("/api/settings");
+  return request("getSettings")
 }
 
 export function updateSettings(input: Partial<Settings>): Promise<Settings> {
-  return apiFetch<Settings>("/api/settings", {
-    method: "PUT",
-    body: JSON.stringify(input),
-  });
+  return request("updateSettings", input)
 }

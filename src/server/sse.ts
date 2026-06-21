@@ -5,11 +5,14 @@ export type SseEvent =
   | { type: "session.stopped"; sessionId: string; ticketId: string | null }
   | { type: "session.ended"; sessionId: string; ticketId: string | null; exitCode: number | null }
   | { type: "session.cost"; sessionId: string; ticketId: string | null; costUsd: number; tokens: number }
+  | { type: "session.improving.started"; sessionId: string }
+  | { type: "session.improving.injecting"; sessionId: string }
+  | { type: "session.improving.done"; sessionId: string }
   | { type: "session.improving_done"; sessionId: string; ticketId: string | null }
+  | { type: "session.file_changed"; sessionId: string; file: string }
   | { type: "ticket.created"; ticketId: string }
   | { type: "ticket.updated"; ticketId: string }
   | { type: "ticket.deleted"; ticketId: string }
-  | { type: "session.file_changed"; sessionId: string; file: string }
   | { type: "pr.created"; sessionId: string; ticketId: string; prUrl: string }
   | { type: "ticket.resolved"; ticketId: string }
   | { type: "system.opencode_upgraded"; version: string };

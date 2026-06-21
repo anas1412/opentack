@@ -1,28 +1,22 @@
-import { apiFetch } from "./client";
-import type { OpencodeConfig, AgentEntry, OpencodeTuiConfig } from "../../shared/types";
+import { request } from "./rpc-client"
+import type { OpencodeConfig, AgentEntry, OpencodeTuiConfig } from "../../shared/types"
 
 export function fetchOpencodeConfig(): Promise<OpencodeConfig> {
-  return apiFetch<OpencodeConfig>("/api/opencode/config");
+  return request("getOpencodeConfig")
 }
 
 export function updateOpencodeConfig(input: OpencodeConfig): Promise<OpencodeConfig> {
-  return apiFetch<OpencodeConfig>("/api/opencode/config", {
-    method: "PUT",
-    body: JSON.stringify(input),
-  });
+  return request("updateOpencodeConfig", input)
 }
 
 export function fetchAgents(): Promise<AgentEntry[]> {
-  return apiFetch<AgentEntry[]>("/api/opencode/agents");
+  return request("listAgents")
 }
 
 export function fetchOpencodeTuiConfig(): Promise<OpencodeTuiConfig> {
-  return apiFetch<OpencodeTuiConfig>("/api/opencode/tui-config");
+  return request("getOpencodeTuiConfig")
 }
 
 export function updateOpencodeTuiConfig(input: OpencodeTuiConfig): Promise<OpencodeTuiConfig> {
-  return apiFetch<OpencodeTuiConfig>("/api/opencode/tui-config", {
-    method: "PUT",
-    body: JSON.stringify(input),
-  });
+  return request("updateOpencodeTuiConfig", input)
 }

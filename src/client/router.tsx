@@ -8,6 +8,7 @@ import {
   useSearch,
   useLocation,
   useNavigate,
+  redirect,
 } from "@tanstack/react-router";
 import { z } from "zod";
 import { useAppStore } from "./store/app";
@@ -260,6 +261,15 @@ const chatRoute = createRoute({
   component: ChatView,
 });
 
+// Redirect /index.html → / (Electrobun loads the SPA at index.html path)
+const indexHtmlFallback = createRoute({
+  getParentRoute: () => rootRoute,
+  path: "/index.html",
+  beforeLoad: () => {
+    throw redirect({ to: "/" })
+  },
+});
+
 // ─── Route Tree & Router ────────────────────────────────────────────
 
 const routeTree = rootRoute.addChildren([
@@ -268,6 +278,7 @@ const routeTree = rootRoute.addChildren([
   usageRoute,
   ticketRoute,
   chatRoute,
+  indexHtmlFallback,
 ]);
 
 const router = createRouter({ routeTree });

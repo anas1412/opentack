@@ -1,37 +1,56 @@
-import { apiFetch } from "./client";
+import { request } from "./rpc-client"
 
 export interface ChatSession {
-  id: string;
-  cwd: string;
-  serverPort: number | null;
-  opencodeSessionId: string | null;
-  createdAt: number;
-  endedAt: number | null;
+  id: string
+  cwd: string
+  serverPort: number | null
+  opencodeSessionId: string | null
+  createdAt: number
+  endedAt: number | null
 }
 
 export interface ChatCreateResponse {
-  id: string;
-  opencodePort: number;
-  cwd: string;
-  opencodeSessionId: string;
-  repoName: string;
+  id: string
+  opencodePort: number
+  cwd: string
+  opencodeSessionId: string | null
+  repoName: string
 }
 
-export function createChat(repoId: string): Promise<ChatCreateResponse> {
-  return apiFetch("/api/chats", {
-    method: "POST",
-    body: JSON.stringify({ repoId }),
-  });
+export function createChat(repoId: string, model?: string, prompt?: string): Promise<ChatCreateResponse> {
+  return request("createChat", { repoId, model, prompt: prompt ?? "" }).then((r) => ({
+    id: r.sessionId,
+    opencodePort: r.opencodePort,
+    cwd: r.cwd,
+    opencodeSessionId: r.opencodeSessionId,
+    repoName: "",
+  }))
 }
 
 export function fetchChats(): Promise<ChatSession[]> {
-  return apiFetch("/api/chats");
+  return request("listChats").then((sessions) =>
+    sessions.map((s) => ({
+      id: s.id,
+      cwd: s.cwd,
+      serverPort: s.serverPort,
+      opencodeSessionId: s.opencodeSessionId,
+      createdAt: s.createdAt,
+      endedAt: s.endedAt,
+    })),
+  )
 }
 
 export function fetchChat(id: string): Promise<ChatSession> {
-  return apiFetch(`/api/chats/${id}`);
+  return request("getChat", { id }).then((s) => ({
+    id: s.id,
+    cwd: s.cwd,
+    serverPort: s.serverPort,
+    opencodeSessionId: s.opencodeSessionId,
+    createdAt: s.createdAt,
+    endedAt: s.endedAt,
+  }))
 }
 
 export function stopChat(id: string): Promise<void> {
-  return apiFetch(`/api/chats/${id}/stop`, { method: "POST" });
+  return request("stopChat", { sessionId: id })
 }

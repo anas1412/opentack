@@ -8,7 +8,7 @@
   },
   "scripts": {
     "dev": "vite build && electrobun dev",
-    "dev:hot": "vite build --watch & electrobun dev --watch",
+    "dev:hot": "vite build --watch & (while [ ! -f dist/client/index.html ]; do sleep 0.2; done; electrobun dev)",
     "build": "vite build && electrobun build",
     "build:client": "vite build",
     "typecheck": "tsc --noEmit",

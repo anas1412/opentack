@@ -1,28 +1,22 @@
-import { apiFetch } from "./client";
-import type { Repo, RepoCreateInput, RepoUpdateInput } from "../../shared/types";
+import { request } from "./rpc-client"
+import type { Repo, RepoCreateInput, RepoUpdateInput } from "../../shared/types"
 
 export function fetchRepos(): Promise<Repo[]> {
-  return apiFetch("/api/repos");
+  return request("listRepos")
 }
 
 export function fetchRepo(id: string): Promise<Repo> {
-  return apiFetch(`/api/repos/${id}`);
+  return request("getRepo", { id })
 }
 
 export function createRepo(input: RepoCreateInput): Promise<Repo> {
-  return apiFetch("/api/repos", {
-    method: "POST",
-    body: JSON.stringify(input),
-  });
+  return request("createRepo", input)
 }
 
 export function updateRepo(id: string, input: RepoUpdateInput): Promise<Repo> {
-  return apiFetch(`/api/repos/${id}`, {
-    method: "PUT",
-    body: JSON.stringify(input),
-  });
+  return request("updateRepo", { id, ...input })
 }
 
 export function deleteRepo(id: string): Promise<void> {
-  return apiFetch(`/api/repos/${id}`, { method: "DELETE" });
+  return request("deleteRepo", { id })
 }

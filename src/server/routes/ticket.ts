@@ -501,7 +501,7 @@ function deserializeTicket(row: typeof schema.tickets.$inferSelect) {
  * Compute changed files by checking git in the worktree (or main repo).
  * Checks three sources: branch diff, unstaged changes, staged changes.
  */
-async function computeChangedFiles(row: typeof schema.tickets.$inferSelect): Promise<string[]> {
+export async function computeChangedFiles(row: typeof schema.tickets.$inferSelect): Promise<string[]> {
   if (!row.branch) return [];
 
   const [repo] = await db.select().from(schema.repos).where(eq(schema.repos.id, row.repoId));

@@ -1,6 +1,7 @@
 import { useState, useRef, useEffect, useCallback } from "react";
 import { useQueryClient } from "@tanstack/react-query";
 import { useCreateRepo } from "../hooks/useRepos";
+import { request } from "../api/rpc-client";
 import { X, Folder, CheckCircle, AlertCircle, Globe } from "lucide-react";
 
 const supportsNativePicker = "showDirectoryPicker" in window;
@@ -145,15 +146,7 @@ export default function AddRepoModal({ open, onClose }: AddRepoModalProps) {
     setCloning(true);
     setError(null);
     try {
-      const res = await fetch("/api/repos/clone", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ gitUrl: gitUrl.trim() }),
-      });
-      if (!res.ok) {
-        const body = await res.json().catch(() => ({}));
-        throw new Error(body.message || `Server error (${res.status})`);
-      }
+      const res = await request("cloneRepo", { gitUrl: gitUrl.trim() });
       qc.invalidateQueries({ queryKey: ["repos"] });
       onClose();
     } catch (err) {
