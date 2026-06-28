@@ -185,13 +185,22 @@ export default function SplitView() {
         <div className="text-center space-y-4">
           <p className="text-sm text-zinc-400">Session ended.</p>
           {error && <p className="text-xs text-red-400">{error}</p>}
-          <button
-            onClick={handleBack}
-            className="inline-flex items-center gap-1.5 px-4 py-2 bg-zinc-800 hover:bg-zinc-700 rounded-lg text-sm font-medium text-zinc-300 transition-colors"
-          >
-            <ArrowLeft size={14} />
-            Back to tickets
-          </button>
+          <div className="flex gap-2 justify-center">
+            <button
+              onClick={handleStartSession}
+              className="inline-flex items-center gap-1.5 px-4 py-2 bg-blue-600 hover:bg-blue-500 rounded-lg text-sm font-medium text-white transition-colors"
+            >
+              <Play size={14} />
+              Restart session
+            </button>
+            <button
+              onClick={handleBack}
+              className="inline-flex items-center gap-1.5 px-4 py-2 bg-zinc-800 hover:bg-zinc-700 rounded-lg text-sm font-medium text-zinc-300 transition-colors"
+            >
+              <ArrowLeft size={14} />
+              Back to tickets
+            </button>
+          </div>
         </div>
       </div>
     );
@@ -200,7 +209,7 @@ export default function SplitView() {
   return (
     <div className="flex h-full">
       {/* ── LEFT: ticket detail panel ── */}
-      <div className="w-[380px] min-w-[380px] border-r border-zinc-800 flex flex-col bg-zinc-950">
+      <div className="w-[480px] min-w-[480px] border-r border-zinc-800 flex flex-col bg-zinc-950">
         <HeaderBar onBack={handleBack} />
         <div className="flex-1 overflow-hidden">
           <TicketDetail ticketId={ticketId} onStartSession={handleStartSession} sessionActive={sessionActive} />
