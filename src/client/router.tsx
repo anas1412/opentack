@@ -175,9 +175,10 @@ function ContentLayout() {
                   key={repo.id}
                   onClick={() => {
                     setChatRepoOpen(false);
+                    setCreatingChat(true);
                     createChat(repo.id).then((chat) => {
                       navigate({ to: `/chat/${chat.id}` });
-                    }).catch(() => {});
+                    }).catch(() => {}).finally(() => setCreatingChat(false));
                   }}
                   className="w-full flex items-center gap-2 px-3 py-2 rounded-lg text-sm text-zinc-300 hover:bg-zinc-800 transition-colors text-left"
                 >
