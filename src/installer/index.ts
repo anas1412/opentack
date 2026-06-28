@@ -279,12 +279,26 @@ async function installOpenTack(): Promise<void> {
   // Build desktop app (Vite + electrobun)
   info("Building desktop app...")
   await $`bun run build`.cwd(dir)
+
+  // Rename app folder from "OpenTack-dev" → "OpenTack" (electrobun appends -dev for dev builds)
+  const arch = process.arch === "x64" ? "x64" : process.arch
+  const platformFolder: Record<string, string> = {
+    win32: `win32-${arch}`,
+    darwin: `darwin-${arch}`,
+    linux: `linux-${arch}`,
+  }
+  const buildSubFolder = `dev-${platformFolder[process.platform] || "linux-x64"}`
+  const buildsDir = path.join(dir, "build", buildSubFolder)
+  const oldAppDir = path.join(buildsDir, "OpenTack-dev")
+  const newAppDir = path.join(buildsDir, "OpenTack")
+  if (await Bun.file(oldAppDir).exists() && !await Bun.file(newAppDir).exists()) {
+    await $`mv ${oldAppDir} ${newAppDir}`.quiet()
+  }
   ok("Desktop app built")
 
   // Register app in system menu (Linux)
   if (process.platform === "linux") {
-    const arch = process.arch === "x64" ? "x64" : process.arch
-    const launcherPath = path.join(dir, "build", `dev-linux-${arch}`, "OpenTack-dev", "bin", "launcher")
+    const launcherPath = path.join(newAppDir, "bin", "launcher")
     const iconPath = path.join(dir, "assets", "icon.png")
     const appsDir = path.join(HOME, ".local", "share", "applications")
     mkdirSync(appsDir, { recursive: true })
@@ -352,28 +366,28 @@ async function main() {
   await ensureGStreamer()
   await installOpenTack()
 
-  // Map platform/arch to electrobun build output path
+  // Find the app (after rename from OpenTack-dev → OpenTack)
   const arch = process.arch === "x64" ? "x64" : process.arch
-  const platformMap: Record<string, string> = {
+  const platformFolder: Record<string, string> = {
     win32: `win32-${arch}`,
     darwin: `darwin-${arch}`,
     linux: `linux-${arch}`,
   }
-  const buildDir = `build/dev-${platformMap[process.platform] || "linux-x64"}`
-  const appName = "OpenTack-dev"
-  const binaryPath =
+  const buildSubFolder = `dev-${platformFolder[process.platform] || "linux-x64"}`
+  const appDir = path.join(INSTALL_DIR, "build", buildSubFolder, "OpenTack")
+  const appPath =
     process.platform === "win32"
-      ? `${buildDir}\\${appName}\\${appName}.exe`
+      ? path.join(appDir, "OpenTack.exe")
       : process.platform === "darwin"
-        ? `${buildDir}/${appName}.app`
-        : `${buildDir}/${appName}/bin/launcher`
+        ? path.join(appDir, "OpenTack.app")
+        : path.join(appDir, "bin", "launcher")
 
   banner("OpenTack is installed!")
   if (process.platform === "linux") {
     console.log(`  ${BOLD}Run it:${NC}  Find "OpenTack" in your app menu`)
   } else {
     console.log(`  ${BOLD}Run it:${NC}`)
-    console.log(`    ${path.join(INSTALL_DIR, binaryPath)}`)
+    console.log(`    ${appPath}`)
   }
   console.log()
   console.log(`  ${BOLD}Data directory:${NC} ${DATA_DIR}`)
