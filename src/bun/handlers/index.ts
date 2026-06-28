@@ -567,8 +567,9 @@ Description: ${ticket.description?.slice(0, 300) ?? ""}
 ${transcriptText}
 </transcript>`
 
-    // Create a temp session for summarization (no model — use opencode's default)
-    const tempSessionId = await createOpencodeSession(port, repo.localPath, "summarize", 1)
+    // Create a temp session for summarization
+    const genSettings = await getSettings()
+    const tempSessionId = await createOpencodeSession(port, repo.localPath, "summarize", 1, parseModel(genSettings.model))
 
     let costUsd = 0
     try {
