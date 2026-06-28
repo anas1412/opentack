@@ -119,36 +119,31 @@ export function registerRecoveredSession(sessionId: string, port: number, repoPa
 }
 
 /**
- * Check if a session process is genuinely alive and healthy.
- * Verifies all three: process exists, cmdline matches, port is listening.
+ * Check if a session process is alive.
+ * On Linux: verifies PID exists, cmdline matches "opencode serve", port is listening.
+ * On other platforms (Windows, macOS): checks PID existence via signal 0.
  */
-export function isSessionAlive(pid: number, port: number, repoPath: string): boolean {
+export function isSessionAlive(pid: number, port: number, _repoPath: string): boolean {
   try {
-    // 1. Process exists
-    if (!existsSync(`/proc/${pid}`)) return false;
+    // Cross-platform: check if PID exists
+    process.kill(pid, 0);
+  } catch {
+    return false;
+  }
 
-    // 2. Command line matches "opencode serve"
+  // Linux-only: verify cmdline + port via /proc/
+  if (process.platform === "linux") {
     try {
+      if (!existsSync(`/proc/${pid}`)) return false;
       const cmdline = readFileSync(`/proc/${pid}/cmdline`, "utf-8");
       if (!cmdline.includes("opencode") || !cmdline.includes("serve")) return false;
-    } catch {
-      return false;
-    }
-
-    // 3. Port matches — check the process's socket info
-    try {
-      const fdDir = `/proc/${pid}/fd`;
-      if (!existsSync(fdDir)) return false;
       const fds = readFileSync(`/proc/${pid}/net/tcp`, "utf-8");
       const hexPort = port.toString(16).padStart(4, "0");
-      // /proc/net/tcp lists listening sockets as "00000000:XXXX" for INADDR_ANY
       if (!fds.includes(`:${hexPort}`)) return false;
     } catch {
       return false;
     }
-
-    return true;
-  } catch {
-    return false;
   }
+
+  return true;
 }

@@ -15,16 +15,20 @@
  */
 
 import { $ } from "bun"
+import { homedir } from "os"
+import { mkdirSync } from "fs"
+import path from "path"
 
 // ── Config ────────────────────────────────────────────────────────
 
 const PKG_VERSION = "0.1.0"
 const REPO = "anas1412/opentack"
 const BRANCH = "main"
-const INSTALL_DIR = Bun.env.OPENTACK_DIR || `${Bun.env.HOME}/opentack`
-const DATA_DIR = Bun.env.OPENTACK_DATA_DIR || `${Bun.env.HOME}/.opentack`
-const BUN_INSTALL_DIR = `${Bun.env.HOME}/.bun`
-const OPENCODE_INSTALL_DIR = `${Bun.env.HOME}/.opencode`
+const HOME = homedir()
+const INSTALL_DIR = Bun.env.OPENTACK_DIR || path.join(HOME, "opentack")
+const DATA_DIR = Bun.env.OPENTACK_DATA_DIR || path.join(HOME, ".opentack")
+const BUN_INSTALL_DIR = path.join(HOME, ".bun")
+const OPENCODE_INSTALL_DIR = path.join(HOME, ".opencode")
 
 // ── Pretty printing ───────────────────────────────────────────────
 
@@ -51,8 +55,9 @@ function banner(title: string) {
 // ── Helpers ───────────────────────────────────────────────────────
 
 async function commandExists(cmd: string): Promise<boolean> {
+  const which = process.platform === "win32" ? "where" : "which"
   try {
-    const result = await $`which ${cmd}`.quiet()
+    const result = await $`${which} ${cmd}`.quiet()
     return result.exitCode === 0
   } catch {
     return false
@@ -61,18 +66,22 @@ async function commandExists(cmd: string): Promise<boolean> {
 
 function prependPath(dir: string) {
   const current = process.env.PATH || ""
+  const sep = process.platform === "win32" ? ";" : ":"
   if (!current.includes(dir)) {
-    process.env.PATH = `${dir}:${current}`
+    process.env.PATH = `${dir}${sep}${current}`
   }
 }
 
 async function curlPipe(url: string): Promise<void> {
-  const process = Bun.spawn(["bash"], {
+  if (process.platform === "win32") {
+    throw new Error("curl | bash is not supported on Windows. Install the tool manually.")
+  }
+  const proc = Bun.spawn(["bash"], {
     stdin: (await fetch(url)).body!,
     stdout: "inherit",
     stderr: "inherit",
   })
-  const exit = await process.exited
+  const exit = await proc.exited
   if (exit !== 0) throw new Error(`Command exited with code ${exit}`)
 }
 
@@ -95,8 +104,13 @@ async function ensureBun(): Promise<void> {
     return
   }
 
+  if (process.platform === "win32") {
+    warn("bun not found. Install it from https://bun.sh or: npm i -g bun")
+    warn("Then re-run this installer.")
+    process.exit(1)
+  }
+
   info("Installing bun...")
-  // Fetch install script and pipe to bash — same as curl | bash
   const res = await fetch("https://bun.sh/install")
   if (!res.ok) throw new Error(`Failed to fetch bun install script (${res.status})`)
   const script = await res.text()
@@ -110,7 +124,7 @@ async function ensureBun(): Promise<void> {
   const exit = await proc.exited
   if (exit !== 0) throw new Error("bun installation script failed")
 
-  prependPath(`${BUN_INSTALL_DIR}/bin`)
+  prependPath(path.join(BUN_INSTALL_DIR, "bin"))
   if (!await commandExists("bun")) {
     err("bun binary not found after installation")
     process.exit(1)
@@ -123,6 +137,12 @@ async function ensureOpencode(): Promise<void> {
     const v = (await $`opencode --version`.text()).trim()
     ok(`opencode ${v}`)
     return
+  }
+
+  if (process.platform === "win32") {
+    warn("opencode not found. Install it from https://opencode.ai/download")
+    warn("Then re-run this installer.")
+    process.exit(1)
   }
 
   info("Installing opencode...")
@@ -139,7 +159,7 @@ async function ensureOpencode(): Promise<void> {
   const exit = await proc.exited
   if (exit !== 0) throw new Error("opencode installation script failed")
 
-  prependPath(`${OPENCODE_INSTALL_DIR}/bin`)
+  prependPath(path.join(OPENCODE_INSTALL_DIR, "bin"))
   if (!await commandExists("opencode")) {
     err("opencode binary not found after installation")
     process.exit(1)
@@ -149,8 +169,7 @@ async function ensureOpencode(): Promise<void> {
 
 async function ensureGStreamer(): Promise<void> {
   // GStreamer is only needed on Linux (WebKitGTK hardcodes enable_media=TRUE)
-  const os = (await $`uname -s`.text()).trim()
-  if (os !== "Linux") return
+  if (process.platform !== "linux") return
 
   const hasGstInspect = await commandExists("gst-inspect-1.0")
   if (!hasGstInspect) return // No GStreamer core installed — WebKit won't try
@@ -215,18 +234,19 @@ async function ensureGStreamer(): Promise<void> {
 async function installOpenTack(): Promise<void> {
   const dir = INSTALL_DIR
 
-  if (await Bun.file(`${dir}/.git`).exists()) {
+  if (await Bun.file(path.join(dir, ".git")).exists()) {
     warn(`${dir} already exists and is a git repository.`)
     console.log("  To update, run: opentack-update")
-    console.log("  To reinstall, remove it first: rm -rf", dir)
-    // Not an error — maybe they ran the installer twice
+    const rmCmd = process.platform === "win32" ? "rmdir /s" : "rm -rf"
+    console.log(`  To reinstall, remove it first: ${rmCmd} ${dir}`)
     return
   }
 
   // If directory exists but isn't a git repo, bail
   if (await Bun.file(dir).exists()) {
     err(`${dir} exists but is not a git repository.`)
-    console.log(`  Remove it: rm -rf ${dir}`)
+    const rmCmd = process.platform === "win32" ? "rmdir /s" : "rm -rf"
+    console.log(`  Remove it: ${rmCmd} ${dir}`)
     console.log("  Then re-run this installer.")
     process.exit(1)
   }
@@ -239,14 +259,14 @@ async function installOpenTack(): Promise<void> {
   await $`bun install`.cwd(dir)
   ok("Dependencies installed")
 
-  await $`mkdir -p ${DATA_DIR}`
+  mkdirSync(DATA_DIR, { recursive: true })
   // Run DB migrations via the installed bun binary
   await $`bun run db:migrate`.cwd(dir)
   ok("Database ready")
 
   // Set default opencode theme
-  const tuiDir = `${Bun.env.HOME}/.config/opencode`
-  await $`mkdir -p ${tuiDir}`
+  const tuiDir = path.join(HOME, ".config", "opencode")
+  mkdirSync(tuiDir, { recursive: true })
   const tuiFile = `${tuiDir}/tui.json`
   if (!await Bun.file(tuiFile).exists()) {
     await Bun.write(

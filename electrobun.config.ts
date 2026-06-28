@@ -22,6 +22,12 @@ export default {
     mac: {
       icons: "assets/icon.icns",
     },
+    win: {
+      icons: "assets/icon.ico",
+    },
+    linux: {
+      icons: "assets/icon.png",
+    },
   },
   release: {
     baseUrl: "https://releases.opentack.dev/",

@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+# Unix-only: Windows users, use opentack.bat or the opentack-install binary.
 set -euo pipefail
 
 REPO="anas1412/opentack"

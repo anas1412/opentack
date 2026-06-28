@@ -156,10 +156,25 @@ After a session, click **Generate notes** to have opencode summarize the session
 | `bun run build` | Build client + server for production |
 | `bun run build:client` | Build only the frontend (Vite) |
 | `bun run build:server` | Build only the server (Bun bundle) |
+| `bun run build:installer` | Compile a single-file installer binary → `dist/opentack-install` (or `.exe` on Windows) |
 | `bun run db:migrate` | Apply database migrations |
 | `bun run db:generate` | Generate migrations from schema |
 | `bun run typecheck` | Type-check the codebase |
 | `bun test` | Run tests |
+
+### Compile a single binary
+
+```bash
+# Installer — bundles everything into one executable (Linux/macOS/Windows)
+bun run build:installer
+
+# The output binary auto-suffixed per platform:
+#   Linux:   dist/opentack-install
+#   macOS:   dist/opentack-install
+#   Windows: dist/opentack-install.exe
+```
+
+The installer binary handles: checking prerequisites, installing bun/opencode if missing (Unix), cloning the repo, running migrations, and building the frontend. Run it with `--help` to see options.
 
 ## Tech stack
 

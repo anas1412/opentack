@@ -1,11 +1,12 @@
-import { execSync } from "child_process";
 import { existsSync } from "fs";
 import path from "path";
+import { homedir } from "os";
 import type { FastifyInstance } from "fastify";
 import { eq } from "drizzle-orm";
 import { z } from "zod";
 import { db, schema } from "../../db";
 import { repoCreateSchema, repoUpdateSchema } from "../validators";
+import { getOpenTackReposDir } from "../../paths";
 
 export function registerRepoRoutes(app: FastifyInstance) {
   // Create repo
@@ -18,21 +19,18 @@ export function registerRepoRoutes(app: FastifyInstance) {
     let defaultBranch = input.defaultBranch;
     if (!localPath) {
       try {
-        const home = process.env.HOME || "/home";
-        const result = execSync(
-          `find "${home}" -maxdepth 5 -type d -name "${input.name}" -exec test -d "{}/.git" \\; -print 2>/dev/null | head -1`,
-          { timeout: 5000, encoding: "utf-8" },
-        ).trim();
-        if (result) {
-          localPath = result;
+        const result = Bun.spawnSync(["find", homedir(), "-maxdepth", "5", "-type", "d", "-name", input.name, "-exec", "test", "-d", "{}/.git", ";", "-print"]);
+        const found = result.stdout.toString().trim().split("\n")[0];
+        if (found) {
+          localPath = found;
           app.log.info({ name: input.name, localPath }, "Auto-discovered repo path");
         } else {
           return reply.status(400).send({
             error: "PATH_NOT_FOUND",
-            message: `Could not find a git repo named "${input.name}" under ${home}. Specify the path manually.`,
+            message: `Could not find a git repo named "${input.name}". Specify the path manually.`,
           });
         }
-      } catch (err) {
+      } catch {
         return reply.status(400).send({
           error: "DISCOVERY_FAILED",
           message: `Could not auto-discover repo path for "${input.name}". Specify the path manually.`,
@@ -41,12 +39,8 @@ export function registerRepoRoutes(app: FastifyInstance) {
     }
 
     // Verify path exists and is a git repo
-    try {
-      execSync(`git -C "${localPath}" rev-parse --git-dir 2>/dev/null`, {
-        timeout: 3000,
-        encoding: "utf-8",
-      });
-    } catch {
+    const gitCheck = Bun.spawnSync(["git", "-C", localPath, "rev-parse", "--git-dir"]);
+    if (gitCheck.exitCode !== 0) {
       return reply.status(400).send({
         error: "NOT_A_GIT_REPO",
         message: `"${localPath}" is not a valid git repository.`,
@@ -55,15 +49,11 @@ export function registerRepoRoutes(app: FastifyInstance) {
 
     // Auto-detect default branch if not explicitly provided (beyond the default "main")
     if (!defaultBranch || defaultBranch === "main") {
-      try {
-        const branch = execSync(
-          `git -C "${localPath}" symbolic-ref --short HEAD 2>/dev/null || git -C "${localPath}" rev-parse --abbrev-ref HEAD`,
-          { timeout: 3000, encoding: "utf-8" },
-        ).trim();
-        if (branch) defaultBranch = branch;
-      } catch {
-        // fall back to "main"
-      }
+      const symbolic = Bun.spawnSync(["git", "-C", localPath, "symbolic-ref", "--short", "HEAD"]);
+      const branch = symbolic.exitCode === 0
+        ? symbolic.stdout.toString().trim()
+        : Bun.spawnSync(["git", "-C", localPath, "rev-parse", "--abbrev-ref", "HEAD"]).stdout.toString().trim();
+      if (branch && branch !== "HEAD") defaultBranch = branch;
     }
 
     const repoRow = {
@@ -134,10 +124,10 @@ export function registerRepoRoutes(app: FastifyInstance) {
       });
     }
 
-    const dataDir = process.env.OPENTACK_DB_PATH
-      ? path.dirname(process.env.OPENTACK_DB_PATH)
-      : path.join(process.env.HOME || "/home", ".opentack");
-    const cloneDest = path.join(dataDir, "repos", repoName);
+    const reposDir = process.env.OPENTACK_DB_PATH
+      ? path.join(path.dirname(process.env.OPENTACK_DB_PATH), "repos")
+      : getOpenTackReposDir();
+    const cloneDest = path.join(reposDir, repoName);
 
     // Check if already exists
     if (existsSync(cloneDest)) {
@@ -150,10 +140,8 @@ export function registerRepoRoutes(app: FastifyInstance) {
     // Clone
     try {
       app.log.info({ gitUrl, cloneDest }, "Cloning repo");
-      execSync(`git clone --depth 1 "${gitUrl}" "${cloneDest}"`, {
-        timeout: 120_000,
-        stdio: "pipe",
-      });
+      const clone = Bun.spawnSync(["git", "clone", "--depth", "1", gitUrl, cloneDest]);
+      if (clone.exitCode !== 0) throw new Error(clone.stderr.toString());
     } catch (err) {
       const stderr = (err as { stderr?: string }).stderr || "";
 
@@ -194,15 +182,11 @@ export function registerRepoRoutes(app: FastifyInstance) {
 
     // Auto-detect default branch
     let defaultBranch = "main";
-    try {
-      const branch = execSync(
-        `git -C "${cloneDest}" symbolic-ref --short HEAD 2>/dev/null || git -C "${cloneDest}" rev-parse --abbrev-ref HEAD`,
-        { timeout: 3000, encoding: "utf-8" },
-      ).trim();
-      if (branch) defaultBranch = branch;
-    } catch {
-      // fall back
-    }
+    const symbolic = Bun.spawnSync(["git", "-C", cloneDest, "symbolic-ref", "--short", "HEAD"]);
+    const branch = symbolic.exitCode === 0
+      ? symbolic.stdout.toString().trim()
+      : Bun.spawnSync(["git", "-C", cloneDest, "rev-parse", "--abbrev-ref", "HEAD"]).stdout.toString().trim();
+    if (branch && branch !== "HEAD") defaultBranch = branch;
 
     const id = crypto.randomUUID();
     const repoRow = {

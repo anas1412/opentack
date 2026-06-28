@@ -1,13 +1,9 @@
 import Database from "bun:sqlite";
-import { homedir } from "os";
 import { existsSync } from "fs";
-
-function opencodeDbPath(): string {
-  return `${homedir()}/.local/share/opencode/opencode.db`;
-}
+import { getOpencodeDbPath } from "../../paths";
 
 export function getOpencodeDb(): Database | null {
-  const dbPath = opencodeDbPath();
+  const dbPath = getOpencodeDbPath();
   if (!existsSync(dbPath)) return null;
   try {
     return new Database(dbPath, { readonly: true });
@@ -21,7 +17,7 @@ export function getOpencodeDb(): Database | null {
  * Returns null if the DB is unavailable.
  */
 function getOpencodeDbWritable(): Database | null {
-  const dbPath = opencodeDbPath();
+  const dbPath = getOpencodeDbPath();
   if (!existsSync(dbPath)) return null;
   try {
     return new Database(dbPath);

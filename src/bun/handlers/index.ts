@@ -4,6 +4,15 @@ import { randomUUID } from "crypto"
 import { execSync } from "child_process"
 import { existsSync, mkdirSync, readFileSync, writeFileSync, readdirSync } from "fs"
 import { homedir } from "os"
+import {
+  getOpencodeConfigDir,
+  getOpencodeConfigPath,
+  getOpencodeTuiPath,
+  getOpencodeDataAgentsDir,
+  getOpenTackDataDir,
+  getOpenTackReposDir,
+  getOpenTackWorktreesDir,
+} from "../../paths"
 import path from "path"
 import { z } from "zod"
 
@@ -66,11 +75,11 @@ function toJsonField(val: unknown): string {
 
 // ─── Helpers ───────────────────────────────────────────────────────────
 
-const OPENCONFIG_DIR = `${homedir()}/.config/opencode`
-const OPENCONFIG_PATH = `${OPENCONFIG_DIR}/opencode.json`
-const TUI_CONFIG_PATH = `${OPENCONFIG_DIR}/tui.json`
-const OPENTACK_DIR = `${homedir()}/.opentack`
-const OPENTACK_REPOS_DIR = `${OPENTACK_DIR}/repos`
+const OPENCONFIG_DIR = getOpencodeConfigDir()
+const OPENCONFIG_PATH = getOpencodeConfigPath()
+const TUI_CONFIG_PATH = getOpencodeTuiPath()
+const OPENTACK_DIR = getOpenTackDataDir()
+const OPENTACK_REPOS_DIR = getOpenTackReposDir()
 
 function getOpenTackDb() {
   return db
@@ -110,10 +119,8 @@ export async function createRepo(input: RepoCreateInput): Promise<Repo> {
 
   // Auto-discover path if not provided
   if (!localPath) {
-    const found = execSync(`find ${homedir()} -maxdepth 4 -type d -name "${data.name}" 2>/dev/null | head -1`, {
-      encoding: "utf-8",
-      timeout: 5000,
-    }).trim()
+    const findResult = Bun.spawnSync(["find", homedir(), "-maxdepth", "4", "-type", "d", "-name", data.name])
+    const found = findResult.stdout.toString().trim().split("\n")[0]
     if (found) localPath = found
   }
 
@@ -439,7 +446,10 @@ export async function updateTicket(params: { id: string } & TicketUpdateInput): 
             .where(eq(schema.sessions.id, existing[0].activeSessionId))
         }
         // Remove worktree + prune + delete branch
-        execSync(`git worktree remove "${existing[0].worktreePath}" 2>/dev/null || git worktree remove --force "${existing[0].worktreePath}" 2>/dev/null; git worktree prune 2>/dev/null; git branch -D "${existing[0].branch}" 2>/dev/null`, { timeout: 15000 })
+        Bun.spawnSync(["git", "worktree", "remove", existing[0].worktreePath])
+        Bun.spawnSync(["git", "worktree", "remove", "--force", existing[0].worktreePath])
+        Bun.spawnSync(["git", "worktree", "prune"])
+        Bun.spawnSync(["git", "branch", "-D", existing[0].branch])
       } catch {}
       updates.worktreePath = null
     }
@@ -1524,7 +1534,7 @@ export async function listAgents(): Promise<AgentEntry[]> {
   // Custom agents from directory
   const agentDirs = [
     `${OPENCONFIG_DIR}/agents`,
-    `${homedir()}/.local/share/opencode/agents`,
+    getOpencodeDataAgentsDir(),
   ]
   for (const dir of agentDirs) {
     try {
@@ -1626,7 +1636,7 @@ export async function createWorktree(params: { ticketId: string }): Promise<void
   const repo = await db.select().from(schema.repos).where(eq(schema.repos.id, ticket[0].repoId)).limit(1)
   if (!repo[0]) throw new Error("Repo not found")
 
-  const worktreeDir = `${homedir()}/opentack-worktrees`
+  const worktreeDir = getOpenTackWorktreesDir()
   const worktreePath = `${worktreeDir}/${repo[0].name}/${ticket[0].branch}`
 
   // Ensure branch exists
@@ -1683,11 +1693,8 @@ export async function removeWorktree(params: { ticketId: string }): Promise<void
   }
 
   if (ticket[0].worktreePath) {
-    try {
-      execSync(`git worktree remove "${ticket[0].worktreePath}" 2>/dev/null; git branch -D "${ticket[0].branch}" 2>/dev/null`, {
-        timeout: 10000,
-      })
-    } catch {}
+    Bun.spawnSync(["git", "worktree", "remove", ticket[0].worktreePath])
+    Bun.spawnSync(["git", "branch", "-D", ticket[0].branch])
   }
 
   await db

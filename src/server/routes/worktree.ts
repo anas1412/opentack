@@ -1,16 +1,19 @@
-import { execSync } from "child_process";
-import { existsSync, mkdirSync } from "fs";
+import { existsSync, mkdirSync, rmSync } from "fs";
 import path from "path";
 import type { FastifyInstance } from "fastify";
 import { eq, isNotNull } from "drizzle-orm";
 import { z } from "zod";
 import { db, schema } from "../../db";
 import { stopSessionServer } from "../opencode-manager";
+import { getOpenTackWorktreesDir } from "../../paths";
 
-const WORKTREES_ROOT = path.join(
-  process.env.HOME || "/home",
-  "opentack-worktrees",
-);
+const WORKTREES_ROOT = getOpenTackWorktreesDir();
+
+/** Cross-platform git runner — no shell, works on Windows. */
+function git(args: string[], opts?: { cwd?: string }): { stdout: string; exitCode: number } {
+  const result = Bun.spawnSync(["git", ...args], { cwd: opts?.cwd });
+  return { stdout: result.stdout.toString().trim(), exitCode: result.exitCode };
+}
 
 type Ticket = typeof schema.tickets.$inferSelect;
 type Repo = typeof schema.repos.$inferSelect;
@@ -32,37 +35,22 @@ export async function createWorktreeForTicket(
   mkdirSync(path.dirname(worktreePath), { recursive: true });
 
   // 1. Fetch latest base branch
-  execSync(
-    `git -C "${repo.localPath}" fetch origin "${ticket.baseBranch}" 2>/dev/null || true`,
-    { timeout: 15000, stdio: "pipe" },
-  );
+  git(["fetch", "origin", ticket.baseBranch!], { cwd: repo.localPath });
 
   // 2. Create the branch from base branch (without switching to it)
-  const branchExists = execSync(
-    `git -C "${repo.localPath}" rev-parse --verify "${branchName}" 2>/dev/null || echo "no"`,
-    { timeout: 5000, encoding: "utf-8" },
-  ).trim();
-  if (branchExists === "no") {
-    execSync(
-      `git -C "${repo.localPath}" branch "${branchName}" "origin/${ticket.baseBranch}" 2>/dev/null || git -C "${repo.localPath}" branch "${branchName}" "${ticket.baseBranch}"`,
-      { timeout: 10000, stdio: "pipe" },
-    );
+  const exists = git(["rev-parse", "--verify", branchName], { cwd: repo.localPath });
+  if (exists.exitCode !== 0) {
+    git(["branch", branchName, `origin/${ticket.baseBranch}`], { cwd: repo.localPath });
   }
 
   // 3. Create the worktree
-  execSync(
-    `git -C "${repo.localPath}" worktree add "${worktreePath}" "${branchName}"`,
-    { timeout: 15000, stdio: "pipe" },
-  );
+  git(["worktree", "add", worktreePath, branchName], { cwd: repo.localPath });
 
   // 4. Run bun install
   if (existsSync(path.join(worktreePath, "package.json"))) {
     try {
-      execSync(`bun install --cwd "${worktreePath}" 2>&1`, {
-        timeout: 120000,
-        stdio: "pipe",
-      });
-    } catch (err) {
+      Bun.spawnSync(["bun", "install", "--cwd", worktreePath]);
+    } catch {
       log?.warn?.({ worktreePath }, "bun install failed in worktree — continuing");
     }
   }
@@ -186,34 +174,20 @@ export async function removeWorktreeForTicket(ticketId: string): Promise<void> {
     .where(eq(schema.repos.id, ticket.repoId));
 
   if (repo && existsSync(repo.localPath)) {
-    try {
-      execSync(
-        `git -C "${repo.localPath}" worktree remove "${ticket.worktreePath}" 2>/dev/null || rm -rf "${ticket.worktreePath}"`,
-        { timeout: 15000, stdio: "pipe" },
-      );
-    } catch {
-      try {
-        execSync(
-          `git -C "${repo.localPath}" worktree remove --force "${ticket.worktreePath}" 2>/dev/null; rm -rf "${ticket.worktreePath}"`,
-          { timeout: 15000, stdio: "pipe" },
-        );
-      } catch {
-        execSync(`rm -rf "${ticket.worktreePath}"`, { timeout: 10000 });
-      }
+    // 2. Remove the worktree (git prune + force remove, fallback to fs.rm)
+    git(["worktree", "remove", ticket.worktreePath], { cwd: repo.localPath });
+    if (existsSync(ticket.worktreePath)) {
+      git(["worktree", "remove", "--force", ticket.worktreePath], { cwd: repo.localPath });
+    }
+    if (existsSync(ticket.worktreePath)) {
+      rmSync(ticket.worktreePath, { recursive: true, force: true });
     }
 
-    // 3. Prune orphaned worktree registrations (rm -rf leaves git metadata behind)
-    try {
-      execSync(`git -C "${repo.localPath}" worktree prune`, { timeout: 10000, stdio: "pipe" });
-    } catch {}
+    // 3. Prune orphaned worktree registrations
+    git(["worktree", "prune"], { cwd: repo.localPath });
 
     // 4. Delete the branch
-    try {
-      execSync(
-        `git -C "${repo.localPath}" branch -D "${ticket.branch}" 2>/dev/null || true`,
-        { timeout: 10000, stdio: "pipe" },
-      );
-    } catch {}
+    git(["branch", "-D", ticket.branch], { cwd: repo.localPath });
   }
 
   // 4. Clear worktreePath on the ticket

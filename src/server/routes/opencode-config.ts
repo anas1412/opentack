@@ -1,24 +1,15 @@
 import { readFileSync, writeFileSync, existsSync, mkdirSync, readdirSync } from "fs";
-import { join } from "path";
+import { join, dirname } from "path";
 import type { FastifyInstance } from "fastify";
 import { opencodeConfigUpdateSchema, opencodeTuiUpdateSchema } from "../validators";
-
-function getConfigDir(): string {
-  return process.env.XDG_CONFIG_HOME
-    ? join(process.env.XDG_CONFIG_HOME, "opencode")
-    : join(process.env.HOME!, ".config", "opencode");
-}
-
-function getConfigPath(): string {
-  return join(getConfigDir(), "opencode.json");
-}
-
-function getTuiConfigPath(): string {
-  return join(getConfigDir(), "tui.json");
-}
+import {
+  getOpencodeConfigDir,
+  getOpencodeConfigPath,
+  getOpencodeTuiPath,
+} from "../../paths";
 
 function readConfig(): Record<string, unknown> {
-  const path = getConfigPath();
+  const path = getOpencodeConfigPath();
   if (!existsSync(path)) return {};
   try {
     return JSON.parse(readFileSync(path, "utf-8"));
@@ -28,7 +19,7 @@ function readConfig(): Record<string, unknown> {
 }
 
 function readTuiConfig(): Record<string, unknown> {
-  const path = getTuiConfigPath();
+  const path = getOpencodeTuiPath();
   if (!existsSync(path)) return {};
   try {
     return JSON.parse(readFileSync(path, "utf-8"));
@@ -38,16 +29,14 @@ function readTuiConfig(): Record<string, unknown> {
 }
 
 function writeConfig(config: Record<string, unknown>): void {
-  const path = getConfigPath();
-  const dir = path.substring(0, path.lastIndexOf("/"));
-  mkdirSync(dir, { recursive: true });
+  const path = getOpencodeConfigPath();
+  mkdirSync(dirname(path), { recursive: true });
   writeFileSync(path, JSON.stringify(config, null, 2) + "\n", "utf-8");
 }
 
 function writeTuiConfig(config: Record<string, unknown>): void {
-  const path = getTuiConfigPath();
-  const dir = path.substring(0, path.lastIndexOf("/"));
-  mkdirSync(dir, { recursive: true });
+  const path = getOpencodeTuiPath();
+  mkdirSync(dirname(path), { recursive: true });
   writeFileSync(path, JSON.stringify(config, null, 2) + "\n", "utf-8");
 }
 
@@ -82,7 +71,7 @@ function listAgents(): { name: string; description?: string; mode?: string }[] {
   }
 
   // 3. Agents from ~/.config/opencode/agents/ (*.md files)
-  const globalAgentDir = join(getConfigDir(), "agents");
+  const globalAgentDir = join(getOpencodeConfigDir(), "agents");
   if (existsSync(globalAgentDir)) {
     try {
       for (const entry of readdirSync(globalAgentDir)) {

@@ -2,9 +2,8 @@ import type { FastifyInstance } from "fastify";
 import { and, desc, eq, isNotNull } from "drizzle-orm";
 import { z } from "zod";
 import { readFileSync, existsSync } from "fs";
-import { execSync } from "child_process";
-import { join } from "path";
 import { db, schema } from "../../db";
+import { getOpencodeConfigPath as getSharedOpencodeConfigPath } from "../../paths";
 import { startSessionServer, stopSessionServer, getSessionPort, getSessionPid } from "../opencode-manager";
 import { emitSse } from "../sse";
 import { enrichFromOpencode, getOpencodeDb, verifyOpencodeSession, fetchOpencodeSessionCost, updateOpencodeSessionDirectory } from "./cost-utils";
@@ -19,15 +18,8 @@ const createSessionSchema = z.object({
 
 // ─── Opencode config helpers ──────────────────────────────────────────
 
-function getOpencodeConfigPath(): string {
-  const configDir = process.env.XDG_CONFIG_HOME
-    ? join(process.env.XDG_CONFIG_HOME, "opencode")
-    : join(process.env.HOME!, ".config", "opencode");
-  return join(configDir, "opencode.json");
-}
-
 function readOpencodeModel(): { providerID: string; id: string } | undefined {
-  const path = getOpencodeConfigPath();
+  const path = getSharedOpencodeConfigPath();
   if (!existsSync(path)) return undefined;
   try {
     const config = JSON.parse(readFileSync(path, "utf-8"));
@@ -586,16 +578,12 @@ export function registerSessionRoutes(app: FastifyInstance) {
     if (!session)
       return reply.status(404).send({ error: "NOT_FOUND", message: "Session not found" });
 
-    try {
-      const branch = execSync(
-        `git -C "${session.cwd}" symbolic-ref --short HEAD 2>/dev/null`,
-        { timeout: 5000, encoding: "utf-8" },
-      ).trim();
-      if (!branch) throw new Error("Not on a branch");
+    const result = Bun.spawnSync(["git", "-C", session.cwd, "symbolic-ref", "--short", "HEAD"]);
+    const branch = result.stdout.toString().trim();
+    if (result.exitCode === 0 && branch) {
       return { branch };
-    } catch {
-      return reply.status(500).send({ error: "GIT_FAILED", message: "Could not determine git branch" });
     }
+    return reply.status(500).send({ error: "GIT_FAILED", message: "Could not determine git branch" });
   });
 
   // Stop session (marks ended, clears ticket.activeSessionId, does NOT kill opencode serve)

@@ -1,15 +1,14 @@
 import { drizzle } from "drizzle-orm/bun-sqlite";
 import { Database } from "bun:sqlite";
 import { mkdirSync } from "fs";
+import { dirname } from "path";
 import * as schema from "./schema";
+import { getOpenTackDbPath } from "../paths";
 
-const DB_PATH =
-  process.env.OPENTACK_DB_PATH ||
-  `${process.env.HOME}/.opentack/db.sqlite`;
+const DB_PATH = getOpenTackDbPath();
 
 // Ensure parent directory exists
-const dir = DB_PATH.substring(0, DB_PATH.lastIndexOf("/"));
-mkdirSync(dir, { recursive: true });
+mkdirSync(dirname(DB_PATH), { recursive: true });
 
 const sqlite = new Database(DB_PATH, { create: true });
 sqlite.exec("PRAGMA journal_mode=WAL;");

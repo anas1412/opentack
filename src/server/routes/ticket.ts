@@ -1,4 +1,3 @@
-import { execSync } from "child_process";
 import { existsSync } from "fs";
 import type { FastifyInstance } from "fastify";
 import { eq, like, and, desc, sql, inArray } from "drizzle-orm";
@@ -514,36 +513,21 @@ export async function computeChangedFiles(row: typeof schema.tickets.$inferSelec
   const files = new Set<string>();
 
   // 1. Committed changes unique to the branch
-  try {
-    const out = execSync(
-      `git -C "${gitDir}" diff --name-only "${baseBranch}...${row.branch}" 2>/dev/null || true`,
-      { timeout: 5000, encoding: "utf-8" },
-    ).trim();
-    if (out) out.split("\n").filter(Boolean).forEach((f) => files.add(f));
-  } catch {
-    // branch may not exist yet
+  const committed = Bun.spawnSync(["git", "-C", gitDir, "diff", "--name-only", `${baseBranch}...${row.branch}`]);
+  if (committed.exitCode === 0) {
+    committed.stdout.toString().trim().split("\n").filter(Boolean).forEach((f) => files.add(f));
   }
 
   // 2. Unstaged changes (files opencode is actively editing)
-  try {
-    const out = execSync(
-      `git -C "${gitDir}" diff --name-only 2>/dev/null || true`,
-      { timeout: 5000, encoding: "utf-8" },
-    ).trim();
-    if (out) out.split("\n").filter(Boolean).forEach((f) => files.add(f));
-  } catch {
-    // ignore
+  const unstaged = Bun.spawnSync(["git", "-C", gitDir, "diff", "--name-only"]);
+  if (unstaged.exitCode === 0) {
+    unstaged.stdout.toString().trim().split("\n").filter(Boolean).forEach((f) => files.add(f));
   }
 
   // 3. Staged but not committed changes
-  try {
-    const out = execSync(
-      `git -C "${gitDir}" diff --cached --name-only 2>/dev/null || true`,
-      { timeout: 5000, encoding: "utf-8" },
-    ).trim();
-    if (out) out.split("\n").filter(Boolean).forEach((f) => files.add(f));
-  } catch {
-    // ignore
+  const staged = Bun.spawnSync(["git", "-C", gitDir, "diff", "--cached", "--name-only"]);
+  if (staged.exitCode === 0) {
+    staged.stdout.toString().trim().split("\n").filter(Boolean).forEach((f) => files.add(f));
   }
 
   return Array.from(files);
