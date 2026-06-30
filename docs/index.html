@@ -402,26 +402,6 @@ button{ font-family:inherit; cursor:pointer; }
 .tcard p{ color:var(--smoke); font-size:.92rem; }
 
 /* ============================================================
-   STACK
-   ============================================================ */
-.stack-row{
-  display:grid; grid-template-columns:170px 1fr; gap:24px;
-  padding-block:18px;
-  border-bottom:1px solid var(--line-soft);
-}
-.stack-row:last-child{ border-bottom:none; }
-@media (max-width:640px){ .stack-row{ grid-template-columns:1fr; gap:10px; } }
-.stack-label{ font-family:var(--font-mono); font-size:.82rem; color:var(--smoke-dim); padding-top:6px; }
-.chips{ display:flex; flex-wrap:wrap; gap:9px; }
-.chip{
-  font-family:var(--font-mono); font-size:.82rem;
-  border:1px solid var(--line); border-radius:7px;
-  padding:6px 12px; color:var(--smoke);
-  transition:border-color .25s, color .25s, background .25s;
-}
-.chip:hover{ border-color:var(--flare-line); color:var(--paper); background:var(--flare-soft); }
-
-/* ============================================================
    QUICKSTART
    ============================================================ */
 .qs-card{
@@ -519,7 +499,6 @@ footer{ border-top:1px solid var(--line); padding-block:34px; }
     <nav class="nav-links">
       <a href="#how">How it works</a>
       <a href="#views">Views</a>
-      <a href="#stack">Stack</a>
     </nav>
     <div class="nav-actions">
       <a class="btn btn-ghost btn-sm" href="https://github.com/anas1412/opentack" target="_blank" rel="noopener">
@@ -599,7 +578,7 @@ footer{ border-top:1px solid var(--line); padding-block:34px; }
     <div class="head head--center" data-reveal>
       <span class="eyebrow">how it works</span>
       <h2>From idle repo to merged ticket</h2>
-      <p>Six steps, one browser tab. No context-switching required.</p>
+      <p>Six steps, one app. No context-switching required.</p>
     </div>
 
     <div class="timeline">
@@ -716,45 +695,6 @@ footer{ border-top:1px solid var(--line); padding-block:34px; }
         <p>Manage repos, check your opencode config, and pick a theme — amber, emerald, violet, or sky.</p>
       </div>
 
-    </div>
-  </div>
-</section>
-
-<!-- ============================================================
-     STACK
-     ============================================================ -->
-<section class="section section--tight" id="stack">
-  <div class="container">
-    <div class="head" data-reveal>
-      <span class="eyebrow">under the hood</span>
-      <h2>Boring infrastructure, on purpose</h2>
-      <p>No servers to manage, no accounts to create — just a fast local stack doing exactly what it's told.</p>
-    </div>
-
-    <div data-reveal>
-      <div class="stack-row">
-        <span class="stack-label">Desktop shell</span>
-        <div class="chips"><span class="chip">Electrobun</span></div>
-      </div>
-      <div class="stack-row">
-        <span class="stack-label">Frontend</span>
-        <div class="chips">
-          <span class="chip">React 19</span><span class="chip">Tailwind CSS 4</span><span class="chip">Vite 6</span>
-          <span class="chip">Zustand 5</span><span class="chip">TanStack Query</span><span class="chip">TanStack Router</span>
-        </div>
-      </div>
-      <div class="stack-row">
-        <span class="stack-label">Backend</span>
-        <div class="chips"><span class="chip">Fastify 5 on Bun</span><span class="chip">Zod</span><span class="chip">chokidar</span></div>
-      </div>
-      <div class="stack-row">
-        <span class="stack-label">Data</span>
-        <div class="chips"><span class="chip">SQLite</span><span class="chip">Drizzle ORM</span></div>
-      </div>
-      <div class="stack-row">
-        <span class="stack-label">Agent SDK</span>
-        <div class="chips"><span class="chip">@opencode-ai/sdk</span></div>
-      </div>
     </div>
   </div>
 </section>

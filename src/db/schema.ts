@@ -73,11 +73,6 @@ export const sessions = sqliteTable("session", {
   exitCode: integer("exit_code"),
   exitReason: text("exit_reason", { enum: exitReasons }),
 
-  promptTokens: integer("prompt_tokens").notNull().default(0),
-  completionTokens: integer("completion_tokens").notNull().default(0),
-  totalTokens: integer("total_tokens").notNull().default(0),
-  costUsd: real("cost_usd").notNull().default(0),
-
   createdAt: integer("created_at", { mode: "number" }).notNull(),
   endedAt: integer("ended_at", { mode: "number" }),
   durationMs: integer("duration_ms"),
@@ -112,17 +107,6 @@ export const settings = sqliteTable("settings", {
   theme: text("theme").notNull().default("amber"),
   model: text("model").notNull().default("opencode/big-pickle"),
   updatedAt: integer("updated_at", { mode: "number" }).notNull(),
-});
-
-// ─── App-level overhead costs (notes gen, prompt improvement, etc.) ─────
-
-export const appCost = sqliteTable("app_cost", {
-  id: text("id").primaryKey(),
-  type: text("type").notNull(), // 'improve_prompt' | 'generate_notes'
-  ticketId: text("ticket_id"),
-  costUsd: real("cost_usd").notNull().default(0),
-  totalTokens: integer("total_tokens").notNull().default(0),
-  createdAt: integer("created_at", { mode: "number" }).notNull(),
 });
 
 // ─── CostRecord — REMOVED. opencode is the sole source of truth for costs. ─────

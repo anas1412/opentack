@@ -1,14 +1,16 @@
 import { useState, useEffect, useRef } from "react";
+import { useNavigate } from "@tanstack/react-router";
 import { useRepos } from "../hooks/useRepos";
 import { useCreateTicket } from "../hooks/useTickets";
 import { useAppStore } from "../store/app";
-import { X } from "lucide-react";
+import { X, ArrowRight } from "lucide-react";
 import type { TicketCategory, TicketPriority } from "../../shared/types";
 
 export default function TicketCreate() {
   const { createOpen, setCreateOpen, selectedRepoId } = useAppStore();
   const { data: repos } = useRepos();
   const createTicket = useCreateTicket();
+  const navigate = useNavigate();
   const titleRef = useRef<HTMLInputElement>(null);
 
   const [title, setTitle] = useState("");
@@ -63,6 +65,26 @@ export default function TicketCreate() {
     });
 
     setCreateOpen(false);
+  };
+
+  const handleCreateAndEnter = async () => {
+    const repo = effectiveRepoId;
+    if (!title.trim() || !description.trim() || !repo || createTicket.isPending) return;
+
+    const ticket = await createTicket.mutateAsync({
+      title: title.trim(),
+      description: description.trim(),
+      repoId: repo,
+      category,
+      priority,
+      tags: tags
+        .split(",")
+        .map((t) => t.trim())
+        .filter(Boolean),
+    });
+
+    setCreateOpen(false);
+    navigate({ to: `/tickets/${ticket.id}` });
   };
 
   if (!createOpen) return null;
@@ -222,6 +244,17 @@ export default function TicketCreate() {
             className="btn-primary flex-1 justify-center"
           >
             {createTicket.isPending ? "Creating..." : "Create ticket"}
+          </button>
+          <button
+            type="button"
+            onClick={handleCreateAndEnter}
+            disabled={!title.trim() || !description.trim() || !effectiveRepoId || createTicket.isPending}
+            className="flex items-center gap-1.5 px-4 py-2 rounded-md text-sm font-medium text-white bg-[var(--accent)] hover:bg-[var(--accent-hover)] transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
+          >
+            {createTicket.isPending ? "Creating..." : <>
+              Create & open
+              <ArrowRight size={14} />
+            </>}
           </button>
         </div>
       </div>

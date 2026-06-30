@@ -98,6 +98,7 @@ export default function JournalView() {
             tickets={day.tickets}
             isExpanded={expanded.has(day.date)}
             onToggle={() => toggleDay(day.date)}
+            repoId={repoId}
           />
         ))}
       </div>
@@ -137,11 +138,13 @@ function DayCard({
   tickets,
   isExpanded,
   onToggle,
+  repoId,
 }: {
   date: string;
   tickets: TicketDayInfo[];
   isExpanded: boolean;
   onToggle: () => void;
+  repoId?: string;
 }) {
   const navigate = useNavigate();
   const label = formatDateLabel(date);
@@ -187,7 +190,7 @@ function DayCard({
                 <div className="flex items-center gap-2">
                   <BookText size={13} className="text-zinc-500 shrink-0" />
                   <button
-                    onClick={() => navigate({ to: `/tickets/${t.id}` })}
+                    onClick={() => navigate({ to: `/tickets/${t.id}`, search: repoId ? { repoId } : {} })}
                     className="text-sm font-medium text-zinc-200 hover:text-amber-400 transition-colors text-left"
                   >
                     {t.title}

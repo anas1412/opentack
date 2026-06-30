@@ -16,7 +16,7 @@ import { registerWorktreeRoutes } from "./routes/worktree";
 import { registerChatRoutes } from "./routes/chat";
 import { isSessionAlive, registerRecoveredSession } from "./opencode-manager";
 import { sseEmitter, SSE_EVENT, type SseEvent } from "./sse";
-import { startCostWatcher } from "./cost-watcher";
+import { startSdkCostWatcher } from "./sdk-cost-watcher";
 
 let _app: Awaited<ReturnType<typeof buildApp>> | null = null;
 
@@ -135,9 +135,9 @@ export async function startServer(port: number = 3000) {
   await app.listen({ port, host: "127.0.0.1" });
   app.log.info(`OpenTack running at http://localhost:${port}`);
 
-  // Start background cost watcher — polls opencode DB for active session costs
-  // and emits session.cost SSE events when values change. Replaces client-side polling.
-  startCostWatcher(3000);
+  // Start background cost watchers:
+  //   startSdkCostWatcher — fetches cost data from opencode via SDK
+  startSdkCostWatcher(3000);
 
   return app;
 }

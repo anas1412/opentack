@@ -256,6 +256,7 @@ const usageRoute = createRoute({
 const ticketRoute = createRoute({
   getParentRoute: () => contentLayout,
   path: "/tickets/$ticketId",
+  validateSearch: contentSearchSchema,
   component: SplitView,
 });
 

@@ -199,7 +199,7 @@ export default function TicketList(_props: TicketListProps) {
               return (
                 <tr
                   key={ticket.id}
-                  onClick={() => navigate({ to: `/tickets/${ticket.id}` })}
+                  onClick={() => navigate({ to: `/tickets/${ticket.id}`, search: repoId ? { repoId } : {} })}
                   className={`border-b border-zinc-800/50 hover:bg-zinc-800/30 cursor-pointer transition-colors group ${
                     isSelected ? "row-accent" : ""
                   }`}

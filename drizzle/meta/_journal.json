@@ -64,6 +64,13 @@
       "when": 1782059293740,
       "tag": "0008_add_model_to_settings",
       "breakpoints": true
+    },
+    {
+      "idx": 9,
+      "version": "6",
+      "when": 1782812040874,
+      "tag": "0009_natural_black_bird",
+      "breakpoints": true
     }
   ]
 }

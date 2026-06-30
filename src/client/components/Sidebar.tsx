@@ -1,5 +1,5 @@
 import { useState, useEffect } from "react";
-import { useNavigate, useSearch } from "@tanstack/react-router";
+import { useNavigate, useSearch, useLocation } from "@tanstack/react-router";
 import { useAppStore } from "../store/app";
 import { useRepos, useDeleteRepo } from "../hooks/useRepos";
 import { useTickets } from "../hooks/useTickets";
@@ -17,7 +17,17 @@ function useUrlRepoId(): string | undefined {
 
 export default function Sidebar() {
   const navigate = useNavigate();
+  const { pathname } = useLocation();
   const currentRepoId = useUrlRepoId();
+
+  /** Navigate to a content page, preserving the current tab (overview/tickets/journal) */
+  function navigateToRepo(repoId?: string) {
+    // Derive base path from current location so the user stays on the same tab
+    let to = "/";
+    if (pathname === "/tickets" || pathname.startsWith("/tickets/")) to = "/tickets";
+    else if (pathname === "/journal") to = "/journal";
+    navigate({ to, search: repoId ? { repoId } : {} });
+  }
   const { setCreateOpen, setSelectedRepoId } = useAppStore();
   const { data: repos } = useRepos();
   const { data: ticketsData } = useTickets();
@@ -134,7 +144,7 @@ export default function Sidebar() {
         {activeTickets.map((ticket) => (
           <button
             key={ticket.id}
-            onClick={() => navigate({ to: `/tickets/${ticket.id}` })}
+            onClick={() => navigate({ to: `/tickets/${ticket.id}`, search: currentRepoId ? { repoId: currentRepoId } : {} })}
             className="w-full flex items-center gap-2 px-3 py-1.5 text-sm text-zinc-400 hover:text-zinc-200 hover:bg-zinc-800/50 rounded-md transition-colors text-left"
           >
             <span className="w-1.5 h-1.5 rounded-full shrink-0 bg-green-400" />
@@ -163,7 +173,7 @@ export default function Sidebar() {
       </div>
       <div className="px-2 space-y-0.5 overflow-auto max-h-[40vh]">
         <button
-          onClick={() => navigate({ to: "/" })}
+          onClick={() => navigateToRepo()}
           className={`w-full flex items-center gap-2 px-3 py-1.5 rounded-md text-sm transition-all duration-150 ${
             currentRepoId === undefined
               ? "nav-active"
@@ -177,7 +187,7 @@ export default function Sidebar() {
         {repos?.map((repo) => (
           <div key={repo.id} className="group flex items-center">
             <button
-              onClick={() => navigate({ to: "/", search: { repoId: repo.id } })}
+              onClick={() => navigateToRepo(repo.id)}
               className={`flex items-center gap-2 px-3 py-1.5 rounded-md text-sm transition-all duration-150 flex-1 min-w-0 ${
                 currentRepoId === repo.id
                   ? "nav-active"
@@ -217,14 +227,7 @@ export default function Sidebar() {
             {costs ? costs.weekTotalTokens.toLocaleString() : "—"}
           </p>
         </div>
-        {costs && costs.overheadUsd > 0 && (
-          <div className="flex items-baseline justify-between mt-0.5 pt-0.5 border-t border-zinc-800/50">
-            <p className="text-[11px] text-zinc-600">Overhead</p>
-            <p className="text-[11px] text-zinc-500 font-mono">
-              ${costs.overheadUsd.toFixed(2)} · {costs.overheadTokens.toLocaleString()} tok
-            </p>
-          </div>
-        )}
+
       </div>
 
       <button

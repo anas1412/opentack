@@ -3,7 +3,7 @@ import { eq, isNull, and } from "drizzle-orm";
 import { z } from "zod";
 import { db, schema } from "../../db";
 import { startSessionServer, stopSessionServer, getSessionPort } from "../opencode-manager";
-import { fetchOpencodeSessionCost } from "./cost-utils";
+import { finalizeSessionCost, markSessionEnded } from "../../shared/session-lifecycle";
 import { emitSse } from "../sse";
 
 async function createOpencodeChatSession(
@@ -74,10 +74,6 @@ export function registerChatRoutes(app: FastifyInstance) {
       filesChanged: "[]",
       exitCode: null,
       exitReason: null,
-      promptTokens: 0,
-      completionTokens: 0,
-      totalTokens: 0,
-      costUsd: 0,
       createdAt: Date.now(),
       endedAt: null,
       durationMs: null,
@@ -141,45 +137,8 @@ export function registerChatRoutes(app: FastifyInstance) {
     if (!session)
       return reply.status(404).send({ error: "NOT_FOUND", message: "Chat not found" });
 
-    // Read cost from opencode DB before closing
-    let costUsd = 0;
-    let totalTokens = 0;
-    if (session.opencodeSessionId) {
-      const cost = fetchOpencodeSessionCost(session.opencodeSessionId);
-      if (cost) {
-        costUsd = cost.costUsd;
-        totalTokens = cost.totalTokens;
-      }
-    }
-
-    // Record in app_cost
-    await db.insert(schema.appCost).values({
-      id: crypto.randomUUID(),
-      type: "chat",
-      ticketId: null,
-      costUsd,
-      totalTokens,
-      createdAt: Date.now(),
-    });
-
-    // Kill the opencode serve process
-    stopSessionServer(id);
-
-    // Mark session as ended
-    await db
-      .update(schema.sessions)
-      .set({
-        exitCode: 0,
-        exitReason: "user_stopped",
-        endedAt: Date.now(),
-        costUsd,
-        totalTokens,
-        pid: null,
-        serverPort: null,
-      })
-      .where(eq(schema.sessions.id, id));
-
-    emitSse({ type: "session.stopped", sessionId: id, ticketId: null });
+    finalizeSessionCost(session.opencodeSessionId);
+    await markSessionEnded(id, null, null);
 
     return reply.status(204).send();
   });

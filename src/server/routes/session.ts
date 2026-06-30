@@ -1,13 +1,19 @@
 import type { FastifyInstance } from "fastify";
 import { and, desc, eq, isNotNull } from "drizzle-orm";
 import { z } from "zod";
-import { readFileSync, existsSync } from "fs";
+import { existsSync } from "fs";
 import { db, schema } from "../../db";
-import { getOpencodeConfigPath as getSharedOpencodeConfigPath } from "../../paths";
-import { startSessionServer, stopSessionServer, getSessionPort, getSessionPid } from "../opencode-manager";
+import { startSessionServer, getSessionPort, getSessionPid } from "../opencode-manager";
 import { emitSse } from "../sse";
-import { enrichFromOpencode, getOpencodeDb, verifyOpencodeSession, fetchOpencodeSessionCost, updateOpencodeSessionDirectory } from "./cost-utils";
+import { createSdkClient, getGlobalConfig } from "../../shared/opencode-client";
+import { getSingleSessionCost, enrichSessions } from "../../shared/opencode-db";
+import { updateOpencodeSessionDirectory } from "./sqlite-helpers";
 import { createWorktreeForTicket } from "./worktree";
+import { sendToSession, generateAndSendImprovedPrompt } from "../../shared/prompt-improver";
+import { createOpencodeSession } from "../../bun/opencode-session";
+import { finalizeSessionCost, markSessionEnded, findOrCreateTicketSessionRow } from "../../shared/session-lifecycle";
+import type { TicketSessionRowResult } from "../../shared/session-lifecycle";
+import type { Session } from "../../shared/types";
 
 // Track which sessions are currently improving prompts (for client polling)
 const improvingSessions = new Map<string, boolean>();
@@ -17,158 +23,6 @@ const createSessionSchema = z.object({
 });
 
 // ─── Opencode config helpers ──────────────────────────────────────────
-
-function readOpencodeModel(): { providerID: string; id: string } | undefined {
-  const path = getSharedOpencodeConfigPath();
-  if (!existsSync(path)) return undefined;
-  try {
-    const config = JSON.parse(readFileSync(path, "utf-8"));
-    const modelStr = config.model as string | undefined;
-    if (!modelStr) return undefined;
-    const parts = modelStr.split("/");
-    if (parts.length === 2) return { providerID: parts[0], id: parts[1] };
-    if (parts.length === 1) return { providerID: "", id: parts[0] };
-    return undefined;
-  } catch {
-    return undefined;
-  }
-}
-
-// ─── Opencode message injector ────────────────────────────────────────
-
-/**
- * Send a plain text message to an opencode session.
- */
-async function sendToSession(
-  port: number,
-  repoPath: string,
-  sessionId: string,
-  text: string,
-  noReply = false,
-): Promise<void> {
-  const url = `http://127.0.0.1:${port}/session/${sessionId}/message?directory=${encodeURIComponent(repoPath)}`;
-  const res = await fetch(url, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({
-      noReply,
-      parts: [{ type: "text", text }],
-    }),
-  });
-  if (!res.ok) {
-    const body = await res.text().catch(() => "unknown");
-    throw new Error(`Failed to send message: ${res.status} ${body.slice(0, 200)}`);
-  }
-}
-
-/**
- * Use the AI itself to turn the raw ticket description into a better-structured
- * initial prompt, then send that to the session. Falls back to the raw description.
- */
-async function generateAndSendImprovedPrompt(
-  port: number,
-  repoPath: string,
-  opencodeSessionId: string,
-  description: string,
-  onInjecting?: () => void,
-): Promise<void> {
-  const tempLabel = `improve-${crypto.randomUUID().slice(0, 8)}`;
-
-  try {
-    // 1. Create a temporary session on the same server
-    const createRes = await fetch(
-      `http://127.0.0.1:${port}/session?directory=${encodeURIComponent(repoPath)}`,
-      {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ title: tempLabel }),
-      },
-    );
-    if (!createRes.ok) throw new Error(`Failed to create temp session: ${createRes.status}`);
-    const { id: tempSessionId } = await createRes.json() as { id: string };
-
-    try {
-      // 2. Build improvement prompt
-      const improvementPrompt = `Rewrite the following task description into a detailed, well-structured prompt for an AI coding assistant.
-
-Rules:
-- Do NOT use any tools, read any files, or scan the repository.
-- Only rewrite the text below. Do not add information from anywhere else.
-- Return ONLY the rewritten prompt. No explanations, no prefixes, no markdown formatting.
-
-Original description:
-${description}
-
-Prompt:`;
-
-      // 3. Send to temp session
-      const msgRes = await fetch(
-        `http://127.0.0.1:${port}/session/${tempSessionId}/message?directory=${encodeURIComponent(repoPath)}`,
-        {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            parts: [{ type: "text", text: improvementPrompt }],
-          }),
-        },
-      );
-      if (!msgRes.ok) throw new Error(`Failed to send improvement prompt: ${msgRes.status}`);
-
-      // 4. Wait for AI to finish
-      await fetch(
-        `http://127.0.0.1:${port}/api/session/${tempSessionId}/wait`,
-        { method: "POST" },
-      );
-
-      // 5. Read the AI response
-      const msgListRes = await fetch(
-        `http://127.0.0.1:${port}/session/${tempSessionId}/message?directory=${encodeURIComponent(repoPath)}`,
-      );
-      type Msg = { info: { role: string }; parts: Array<{ type: string; text?: string }> };
-      const messages = await msgListRes.json() as Msg[];
-
-      const improved = (Array.isArray(messages) ? messages : [])
-        .filter((m) => m.info?.role === "assistant")
-        .flatMap((m) => m.parts ?? [])
-        .filter((p) => p.type === "text" && p.text)
-        .map((p) => p.text!.trim())
-        .filter(Boolean)
-        .join("\n");
-
-      // 6. Save app-level cost before deleting
-      try {
-        const cost = fetchOpencodeSessionCost(tempSessionId);
-        if (cost) {
-          await db.insert(schema.appCost).values({
-            id: crypto.randomUUID(),
-            type: "improve_prompt",
-            ticketId: null,
-            costUsd: cost.costUsd,
-            totalTokens: cost.totalTokens,
-            createdAt: Date.now(),
-          });
-        }
-      } catch { /* best-effort */ }
-
-      // 7. Send the improved prompt (or original as fallback) to the real session
-      // Fire onInjecting right when the HTTP request is sent (AI starts working), don't wait for full reply
-      const sendPromise = sendToSession(port, repoPath, opencodeSessionId, improved || description);
-      onInjecting?.();
-      await sendPromise;
-    } finally {
-      // Clean up temp session
-      fetch(
-        `http://127.0.0.1:${port}/session/${tempSessionId}?directory=${encodeURIComponent(repoPath)}`,
-        { method: "DELETE" },
-      ).catch(() => {});
-    }
-  } catch (err) {
-    console.warn("Failed to generate improved prompt, sending raw description:", err);
-    const sendPromise = sendToSession(port, repoPath, opencodeSessionId, description).catch(() => {});
-    onInjecting?.();
-    await sendPromise;
-  }
-}
 
 export function registerSessionRoutes(app: FastifyInstance) {
   // Recent sessions activity feed (across all repos)
@@ -191,8 +45,6 @@ export function registerSessionRoutes(app: FastifyInstance) {
         repoName: schema.repos.name,
         model: schema.sessions.model,
         opencodeSessionId: schema.sessions.opencodeSessionId,
-        totalTokens: schema.sessions.totalTokens,
-        costUsd: schema.sessions.costUsd,
         createdAt: schema.sessions.createdAt,
         endedAt: schema.sessions.endedAt,
         durationMs: schema.sessions.durationMs,
@@ -206,39 +58,7 @@ export function registerSessionRoutes(app: FastifyInstance) {
       .orderBy(desc(schema.sessions.createdAt))
       .limit(query.limit);
 
-    // Batch-enrich with real token/cost data from opencode DB
-    const ocDb = getOpencodeDb();
-    if (ocDb) {
-      try {
-        const sessionIds = rows
-          .map((r) => r.opencodeSessionId)
-          .filter((id): id is string => id !== null);
-
-        if (sessionIds.length > 0) {
-          const placeholders = sessionIds.map(() => "?").join(",");
-          const opencodeRows = ocDb
-            .query(
-              `SELECT id, cost, tokens_input + tokens_output as total_tokens
-               FROM session WHERE id IN (${placeholders})`,
-            )
-            .all(...sessionIds) as { id: string; cost: number; total_tokens: number }[];
-
-          const ocMap = new Map(opencodeRows.map((r) => [r.id, r]));
-
-          for (const row of rows) {
-            if (row.opencodeSessionId && ocMap.has(row.opencodeSessionId)) {
-              const oc = ocMap.get(row.opencodeSessionId)!;
-              row.costUsd = oc.cost;
-              row.totalTokens = oc.total_tokens;
-            }
-          }
-        }
-      } finally {
-        ocDb.close();
-      }
-    }
-
-    return rows;
+    return enrichSessions(rows);
   });
 
   // List sessions for a ticket
@@ -259,14 +79,8 @@ export function registerSessionRoutes(app: FastifyInstance) {
       .where(eq(schema.sessions.ticketId, ticketId))
       .orderBy(schema.sessions.createdAt);
 
-    return rows.map((row) => {
-      const s = deserializeSession(row);
-      const enriched = enrichFromOpencode(s.opencodeSessionId ?? null, {
-        costUsd: s.costUsd,
-        totalTokens: s.totalTokens,
-      });
-      return { ...s, costUsd: enriched.costUsd, totalTokens: enriched.totalTokens };
-    });
+    const deserialized = rows.map(deserializeSession);
+    return enrichSessions(deserialized);
   });
 
   // Get session
@@ -275,7 +89,15 @@ export function registerSessionRoutes(app: FastifyInstance) {
     const [row] = await db.select().from(schema.sessions).where(eq(schema.sessions.id, id));
     if (!row)
       return reply.status(404).send({ error: "NOT_FOUND", message: "Session not found" });
-    return deserializeSession(row);
+    const s = deserializeSession(row) as Session;
+    if (s.opencodeSessionId) {
+      const c = getSingleSessionCost(s.opencodeSessionId);
+      if (c) {
+        s.costUsd = c.costUsd;
+        s.totalTokens = c.totalTokens;
+      }
+    }
+    return s;
   });
 
   // Create or re-use session (starts opencode serve for the repo)
@@ -300,8 +122,6 @@ export function registerSessionRoutes(app: FastifyInstance) {
       return reply.status(404).send({ error: "NOT_FOUND", message: "Repo not found" });
 
     // Auto-create worktree on first session start if it doesn't exist yet.
-    // If worktreePath is set but the directory was deleted out-of-band
-    // (e.g. manual git worktree remove), clear it and create fresh.
     let sessionCwd: string;
     if (ticket.worktreePath && existsSync(ticket.worktreePath)) {
       sessionCwd = ticket.worktreePath;
@@ -314,123 +134,40 @@ export function registerSessionRoutes(app: FastifyInstance) {
       sessionCwd = await createWorktreeForTicket(ticket, repo, app.log);
     }
 
-    // One session per ticket — find any existing session (active or ended)
-    const [existingSession] = await db
-      .select()
-      .from(schema.sessions)
-      .where(eq(schema.sessions.ticketId, input.ticketId))
-      .limit(1);
-
-    let sessionId: string;
-    let opencodeSessionId: string | null = null;
-
-    if (existingSession) {
-      // Reuse — reset end state so it appears active again
-      sessionId = existingSession.id;
-      opencodeSessionId = existingSession.opencodeSessionId;
-
-      // If the opencode session was deleted, clear it so we create a fresh one
-      if (opencodeSessionId && !verifyOpencodeSession(opencodeSessionId)) {
-        app.log.warn({ sessionId, opencodeSessionId }, "Opencode session not found — will create new one");
-        opencodeSessionId = null;
-      }
-
-      // Update the opencode session's directory to match the current cwd (e.g. worktree path)
-      if (opencodeSessionId) {
-        updateOpencodeSessionDirectory(opencodeSessionId, sessionCwd);
-      }
-
-      await db
-        .update(schema.sessions)
-        .set({
-          exitCode: null,
-          exitReason: null,
-          endedAt: null,
-          durationMs: null,
-          cwd: sessionCwd,
-          branch: ticket.branch,
-          createdAt: Date.now(), // bump for timeline sort
-        })
-        .where(eq(schema.sessions.id, sessionId));
-    } else {
-      // Create new session row
-      sessionId = crypto.randomUUID();
-      await db.insert(schema.sessions).values({
-        id: sessionId,
-        ticketId: input.ticketId,
-        opencodeVersion: "latest",
-        model: "unknown",
-        cwd: sessionCwd,
-        branch: ticket.branch,
-        initialPrompt: ticket.description,
-        opencodeSessionId: null,
-        transcript: "[]",
-        diff: "[]",
-        filesChanged: "[]",
-        exitCode: null,
-        exitReason: null,
-        promptTokens: 0,
-        completionTokens: 0,
-        totalTokens: 0,
-        costUsd: 0,
-        createdAt: Date.now(),
-        endedAt: null,
-        durationMs: null,
-        approved: null,
-        revisionNote: null,
-      });
-    }
-
-    // Update ticket status + active session
-    await db
-      .update(schema.tickets)
-      .set({
-        status: "in_progress",
-        activeSessionId: sessionId,
-        updatedAt: Date.now(),
-      })
-      .where(eq(schema.tickets.id, input.ticketId));
-
-    // Emit SSE event
-    emitSse({ type: "session.started", sessionId, ticketId: input.ticketId });
-
-    // Start opencode serve for this session (one server per session for parallel isolation)
-    let port: number;
+    // Find or create session row + start opencode server
+    let result: TicketSessionRowResult;
     try {
-      port = await startSessionServer(sessionId, sessionCwd);
-      // Persist PID + port for orphan recovery
-      const pid = getSessionPid(sessionId);
-      if (pid) {
-        await db
-          .update(schema.sessions)
-          .set({ pid, serverPort: port })
-          .where(eq(schema.sessions.id, sessionId));
-      }
+      result = await findOrCreateTicketSessionRow(ticket, sessionCwd);
     } catch (err) {
-      app.log.error({ err, sessionId }, "Failed to start opencode server");
-      await db
-        .update(schema.sessions)
-        .set({ exitCode: -1, exitReason: "error", endedAt: Date.now() })
-        .where(eq(schema.sessions.id, sessionId));
-
-      await db
-        .update(schema.tickets)
-        .set({ status: "open", activeSessionId: null, updatedAt: Date.now() })
-        .where(eq(schema.tickets.id, input.ticketId));
-
+      app.log.error({ err, ticketId: input.ticketId }, "Failed to start opencode server");
       return reply.status(500).send({
         error: "SERVER_START_FAILED",
         message: "Could not start opencode server. Check that opencode is installed and in your PATH.",
       });
     }
 
-    // Read model from opencode.json config
-    const opencodeModel = readOpencodeModel();
+    const { sessionId, opencodePort: port, opencodeSessionId: existingId, existingSession } = result;
+    let opencodeSessionId = existingId;
+
+    // Read model from opencode config via SDK
+    let opencodeModel: { providerID: string; id: string } | undefined;
+    try {
+      const client = createSdkClient(port);
+      const config = await getGlobalConfig(client);
+      if (config.model) {
+        const parts = config.model.split("/");
+        opencodeModel = parts.length === 2
+          ? { providerID: parts[0], id: parts[1] }
+          : parts.length === 1
+            ? { providerID: "", id: parts[0] }
+            : undefined;
+      }
+    } catch { /* best-effort */ }
     const modelStr = opencodeModel
       ? `${opencodeModel.providerID}/${opencodeModel.id}`
       : "unknown";
 
-    // Update model on the session row (new sessions) or skip (reused sessions keep old model)
+    // Update model on new sessions only (reused sessions keep old model)
     if (!existingSession) {
       await db
         .update(schema.sessions)
@@ -438,10 +175,10 @@ export function registerSessionRoutes(app: FastifyInstance) {
         .where(eq(schema.sessions.id, sessionId));
     }
 
-    // Create or reuse opencode session ID (preserves conversation history)
+    // Create opencode session if we don't have one
     if (!opencodeSessionId) {
       try {
-        opencodeSessionId = await createOpencodeSession(port, sessionCwd, ticket.title, opencodeModel);
+        opencodeSessionId = await createOpencodeSession(port, sessionCwd, ticket.title, 1, opencodeModel);
       } catch (err) {
         app.log.warn({ err, sessionId }, "Could not create opencode session — messages won't persist");
       }
@@ -516,7 +253,7 @@ export function registerSessionRoutes(app: FastifyInstance) {
       session.cwd,
       session.opencodeSessionId,
       ticket.description,
-      onDone,
+      { onInjecting: onDone },
     ).catch(() => onDone());
 
     return { improving: true };
@@ -561,7 +298,18 @@ export function registerSessionRoutes(app: FastifyInstance) {
       }
     }
 
-    await sendToSession(port, session.cwd, session.opencodeSessionId, text);
+    try {
+      await sendToSession(port, session.cwd, session.opencodeSessionId, text);
+    } catch {
+      // Session may have been removed from opencode's DB — create a replacement
+      app.log.warn({ sessionId: id, opencodeSessionId: session.opencodeSessionId }, "send failed — creating replacement");
+      const newId = await createOpencodeSession(port, session.cwd, session.ticketId || id, 1);
+      await db
+        .update(schema.sessions)
+        .set({ opencodeSessionId: newId })
+        .where(eq(schema.sessions.id, id));
+      await sendToSession(port, session.cwd, newId, text);
+    }
 
     return { success: true };
   });
@@ -586,7 +334,7 @@ export function registerSessionRoutes(app: FastifyInstance) {
     return reply.status(500).send({ error: "GIT_FAILED", message: "Could not determine git branch" });
   });
 
-  // Stop session (marks ended, clears ticket.activeSessionId, does NOT kill opencode serve)
+  // Stop session (marks ended, clears ticket.activeSessionId, kills server)
   app.post("/api/sessions/:id/stop", async (req, reply) => {
     const { id } = req.params as { id: string };
 
@@ -597,56 +345,12 @@ export function registerSessionRoutes(app: FastifyInstance) {
     if (!session)
       return reply.status(404).send({ error: "NOT_FOUND", message: "Session not found" });
 
-    await db
-      .update(schema.sessions)
-      .set({ exitCode: 0, exitReason: "user_stopped", endedAt: Date.now(), pid: null, serverPort: null })
-      .where(eq(schema.sessions.id, id));
-
-    // Clear ticket's activeSessionId so sidebar updates and auto-resume is clean
-    if (session.ticketId) {
-      await db
-        .update(schema.tickets)
-        .set({ activeSessionId: null, updatedAt: Date.now() })
-        .where(eq(schema.tickets.id, session.ticketId));
-    }
-
-    // Kill the per-session opencode serve process (free port)
-    stopSessionServer(id);
-
-    emitSse({ type: "session.stopped", sessionId: id, ticketId: session.ticketId });
+    finalizeSessionCost(session.opencodeSessionId);
+    await markSessionEnded(id, session.ticketId, session.createdAt);
 
     return reply.status(204).send();
   });
 
-}
-
-/**
- * Create a session on the opencode server for message persistence.
- */
-async function createOpencodeSession(
-  port: number,
-  repoPath: string,
-  title?: string,
-  model?: { providerID: string; id: string },
-): Promise<string> {
-  const url = `http://127.0.0.1:${port}/session?directory=${encodeURIComponent(repoPath)}`;
-  const body: Record<string, unknown> = {};
-  if (title) body.title = title;
-  if (model) body.model = model;
-
-  const res = await fetch(url, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(body),
-  });
-
-  if (!res.ok) {
-    const text = await res.text().catch(() => "unknown");
-    throw new Error(`Failed to create opencode session: ${res.status} ${text.slice(0, 200)}`);
-  }
-
-  const session = await res.json() as { id: string };
-  return session.id;
 }
 
 function deserializeSession(row: typeof schema.sessions.$inferSelect) {

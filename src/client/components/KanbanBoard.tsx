@@ -225,7 +225,7 @@ export default function KanbanBoard(_props: KanbanBoardProps) {
                     key={ticket.id}
                     ticket={ticket}
                     repoName={repoMap.get(ticket.repoId) ?? ticket.repoId.slice(0, 8)}
-                    onSelect={(id) => navigate({ to: `/tickets/${id}` })}
+                    onSelect={(id) => navigate({ to: `/tickets/${id}`, search: repoId ? { repoId } : {} })}
                   />
                 ))}
                 {tickets.length === 0 && (

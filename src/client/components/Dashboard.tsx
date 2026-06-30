@@ -199,7 +199,7 @@ export default function Dashboard() {
                 return (
                   <button
                     key={ticket.id}
-                    onClick={() => navigate({ to: `/tickets/${ticket.id}` })}
+                    onClick={() => navigate({ to: `/tickets/${ticket.id}`, search: repoId ? { repoId } : {} })}
                     className="w-full flex items-center gap-3 px-3 py-2 rounded-lg hover:bg-zinc-800/50 transition-colors text-left group"
                   >
                     <span

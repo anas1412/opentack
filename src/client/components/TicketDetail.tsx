@@ -51,36 +51,47 @@ const STATUS_ACTIONS: Record<string, StatusAction[]> = {
   ],
 };
 
-function StatusActions({ status, ticketId }: { status: TicketStatus; ticketId: string }) {
+function StatusActions({ status, ticketId, onStopSession }: { status: TicketStatus; ticketId: string; onStopSession?: () => Promise<void> }) {
   const updateTicket = useUpdateTicket();
+  const [pendingAction, setPendingAction] = useState<TicketStatus | null>(null);
   const [error, setError] = useState<string | null>(null);
   const actions = STATUS_ACTIONS[status];
   if (!actions || actions.length === 0) return null;
 
   async function handleClick(nextStatus: TicketStatus) {
     setError(null);
+    setPendingAction(nextStatus);
     try {
+      // Stop the opencode session when work on this ticket is done
+      if ((nextStatus === "needs_review" || nextStatus === "resolved" || nextStatus === "closed") && onStopSession) {
+        await onStopSession();
+      }
       await updateTicket.mutateAsync({ id: ticketId, input: { status: nextStatus } });
     } catch (err) {
       setError(err instanceof Error ? err.message : "Failed to update ticket");
+    } finally {
+      setPendingAction(null);
     }
   }
 
   return (
     <div className="flex flex-col items-center gap-2">
       <div className="flex items-center gap-2">
-        {actions.map((action) => (
-          <button
-            key={action.nextStatus}
-            disabled={updateTicket.isPending}
-            onClick={() => handleClick(action.nextStatus)}
-            className={`flex items-center gap-1.5 px-3 py-1.5 rounded-md text-xs font-medium transition-colors
-              ${updateTicket.isPending ? "opacity-50 cursor-not-allowed" : action.color}`}
-          >
-            {updateTicket.isPending ? <RotateCcw size={13} className="animate-spin" /> : action.icon}
-            {action.label}
-          </button>
-        ))}
+        {actions.map((action) => {
+          const isLoading = pendingAction === action.nextStatus;
+          return (
+            <button
+              key={action.nextStatus}
+              disabled={isLoading}
+              onClick={() => handleClick(action.nextStatus)}
+              className={`flex items-center gap-1.5 px-3 py-1.5 rounded-md text-xs font-medium transition-colors
+                ${isLoading ? "opacity-50 cursor-not-allowed" : action.color}`}
+            >
+              {isLoading ? <RotateCcw size={13} className="animate-spin" /> : action.icon}
+              {action.label}
+            </button>
+          );
+        })}
       </div>
       {error && <p className="text-xs text-red-400">{error}</p>}
     </div>
@@ -90,10 +101,11 @@ function StatusActions({ status, ticketId }: { status: TicketStatus; ticketId: s
 interface TicketDetailProps {
   ticketId: string;
   onStartSession: () => void;
+  onStopSession?: () => Promise<void>;
   sessionActive: boolean;
 }
 
-export default function TicketDetail({ ticketId, onStartSession, sessionActive }: TicketDetailProps) {
+export default function TicketDetail({ ticketId, onStartSession, onStopSession, sessionActive }: TicketDetailProps) {
   const { data: ticket, isLoading, isError } = useTicket(ticketId);
   const { data: repos } = useRepos();
   const { data: sessions } = useTicketSessions(ticketId);
@@ -366,7 +378,7 @@ export default function TicketDetail({ ticketId, onStartSession, sessionActive }
 
       {/* ── Status Actions ── */}
       <div className="border-t border-zinc-800 px-4 py-3 flex items-center justify-center gap-2">
-        <StatusActions status={ticket.status} ticketId={ticket.id} />
+        <StatusActions status={ticket.status} ticketId={ticket.id} onStopSession={onStopSession} />
       </div>
     </div>
     );

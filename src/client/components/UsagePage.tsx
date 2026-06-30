@@ -289,7 +289,7 @@ export default function UsagePage() {
                           </td>
                           <td className="px-4 py-2.5">
                             <button
-                              onClick={() => navigate({ to: `/tickets/${t.ticketId}` })}
+                              onClick={() => navigate({ to: `/tickets/${t.ticketId}`, search: repoId ? { repoId } : {} })}
                               className="text-zinc-300 hover:text-white transition-colors text-left"
                             >
                               {t.ticketTitle}

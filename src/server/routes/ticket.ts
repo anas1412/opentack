@@ -4,14 +4,9 @@ import { eq, like, and, desc, sql, inArray } from "drizzle-orm";
 
 import { db, schema } from "../../db";
 import { ticketCreateSchema, ticketUpdateSchema, ticketListQuerySchema } from "../validators";
-import {
-  enrichFromOpencode,
-  getOpencodeDb,
-  updateOpencodeSessionTitle,
-  deleteOpencodeSession,
-  fetchOpencodeSessionCost,
-} from "./cost-utils";
-import { startSessionServer, stopSessionServer } from "../opencode-manager";
+import { createSdkClient } from "../../shared/opencode-client";
+import { enrichSessions } from "../../shared/opencode-db";
+import { startSessionServer, stopSessionServer, getAnyActivePort } from "../opencode-manager";
 import { removeWorktreeForTicket } from "./worktree";
 import { emitSse } from "../sse";
 import { z } from "zod";
@@ -105,38 +100,14 @@ export function registerTicketRoutes(app: FastifyInstance) {
         .from(schema.sessions)
         .where(sql`${schema.sessions.ticketId} IN (${ticketIds.join(",")})`);
 
-      // Batch look up opencode session costs
-      const ocSessionIds = allSessions.map((s) => s.opencodeSessionId).filter(Boolean) as string[];
-      const ocCostMap = new Map<string, { cost: number; tokens: number }>();
-      if (ocSessionIds.length > 0) {
-        const ocDb = getOpencodeDb();
-        if (ocDb) {
-          try {
-            const placeholders = ocSessionIds.map(() => "?").join(",");
-            const rows = ocDb
-              .query(
-                `SELECT id, cost, tokens_input + tokens_output as tokens
-                 FROM session WHERE id IN (${placeholders})`,
-              )
-              .all(...ocSessionIds) as { id: string; cost: number; tokens: number }[];
-            for (const r of rows) ocCostMap.set(r.id, { cost: r.cost, tokens: r.tokens });
-            ocDb.close();
-          } catch {
-            ocDb.close();
-          }
-        }
-      }
-
-      // Sum costs per ticket (skip chat sessions with no ticketId)
+      // Enrich with opencode DB costs, then aggregate per ticket
+      const enriched = enrichSessions(allSessions);
       const costByTicket = new Map<string, { costUsd: number; totalTokens: number }>();
-      for (const s of allSessions) {
+      for (const s of enriched) {
         if (!s.ticketId) continue;
-        const oc = s.opencodeSessionId ? ocCostMap.get(s.opencodeSessionId) : null;
-        const costUsd = oc?.cost ?? s.costUsd;
-        const totalTokens = oc?.tokens ?? s.totalTokens;
         const existing = costByTicket.get(s.ticketId) ?? { costUsd: 0, totalTokens: 0 };
-        existing.costUsd += costUsd;
-        existing.totalTokens += totalTokens;
+        existing.costUsd += s.costUsd;
+        existing.totalTokens += s.totalTokens;
         costByTicket.set(s.ticketId, existing);
       }
 
@@ -169,13 +140,9 @@ export function registerTicketRoutes(app: FastifyInstance) {
       .from(schema.sessions)
       .where(eq(schema.sessions.ticketId, id));
 
-    let realCost = 0;
-    let realTokens = 0;
-    for (const s of sessions) {
-      const enriched = enrichFromOpencode(s.opencodeSessionId, { costUsd: s.costUsd, totalTokens: s.totalTokens });
-      realCost += enriched.costUsd;
-      realTokens += enriched.totalTokens;
-    }
+    const enriched = enrichSessions(sessions);
+    const realCost = enriched.reduce((sum, s) => sum + s.costUsd, 0);
+    const realTokens = enriched.reduce((sum, s) => sum + s.totalTokens, 0);
 
     const ticket = deserializeTicket(row);
 
@@ -226,8 +193,15 @@ export function registerTicketRoutes(app: FastifyInstance) {
             sql`${schema.sessions.opencodeSessionId} IS NOT NULL`,
           ),
         );
-      for (const s of ticketSessions) {
-        updateOpencodeSessionTitle(s.opencodeSessionId, input.title);
+      const port = await getAnyActivePort();
+      if (port) {
+        const client = createSdkClient(port);
+        for (const s of ticketSessions) {
+          if (!s.opencodeSessionId) continue;
+          try {
+            await client.session.update({ sessionID: s.opencodeSessionId, title: input.title });
+          } catch { /* best-effort */ }
+        }
       }
     }
 
@@ -245,8 +219,13 @@ export function registerTicketRoutes(app: FastifyInstance) {
       .select()
       .from(schema.sessions)
       .where(eq(schema.sessions.ticketId, id));
-    for (const s of ticketSessions) {
-      deleteOpencodeSession(s.opencodeSessionId);
+    const port = await getAnyActivePort();
+    if (port) {
+      const client = createSdkClient(port);
+      for (const s of ticketSessions) {
+        if (!s.opencodeSessionId) continue;
+        try { await client.session.delete({ sessionID: s.opencodeSessionId }); } catch { /* best-effort */ }
+      }
     }
     await db.delete(schema.sessions).where(eq(schema.sessions.ticketId, id));
 
@@ -351,49 +330,29 @@ ${transcriptText}
 </transcript>`;
 
     try {
-      // 1. Create a temporary session for summarization
-      const createRes = await fetch(
-        `http://127.0.0.1:${port}/session?directory=${encodeURIComponent(repo.localPath)}`,
-        {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ title: "summarize" }),
-        },
-      );
-      if (!createRes.ok) throw new Error("Failed to create temp session");
-      const { id: tempSessionId } = await createRes.json() as { id: string };
+      const client = createSdkClient(port);
 
-      // 2. Send the summarization prompt to the temp session
-      const msgRes = await fetch(
-        `http://127.0.0.1:${port}/session/${tempSessionId}/message?directory=${encodeURIComponent(repo.localPath)}`,
-        {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            parts: [{ type: "text", text: prompt }],
-          }),
-        },
-      );
-      if (!msgRes.ok) throw new Error("Failed to send prompt to temp session");
+      // 1. Create a temporary session for summarization (SDK)
+      const createResult = await client.session.create({
+        directory: repo.localPath,
+        title: "summarize",
+      });
+      const tempSessionId = ((createResult.data as any)?.id ?? (createResult as any).id) as string;
+      if (!tempSessionId) throw new Error("Failed to create temp session");
 
-      // 3. Wait for AI to finish
-      await fetch(
-        `http://127.0.0.1:${port}/api/session/${tempSessionId}/wait`,
-        { method: "POST" },
-      );
+      // 2. Send the summarization prompt — SDK prompt() waits for AI response
+      await client.session.prompt({
+        sessionID: tempSessionId,
+        directory: repo.localPath,
+        parts: [{ type: "text", text: prompt }],
+      });
 
-      // 4. Read the AI response messages
-      const msgListRes = await fetch(
-        `http://127.0.0.1:${port}/session/${tempSessionId}/message?directory=${encodeURIComponent(repo.localPath)}`,
-      );
-      type MessageResponse = Array<{
-        info: { role: string };
-        parts: Array<{ type: string; text?: string }>;
-      }>;
-      const messages = await msgListRes.json() as MessageResponse;
+      // 3. Read the AI response messages
+      const msgResult = await client.session.messages({ sessionID: tempSessionId });
+      const messages = Array.isArray(msgResult.data) ? msgResult.data : [];
 
       // Extract text only from assistant messages
-      let notes = (Array.isArray(messages) ? messages : [])
+      let notes = (messages as Array<{ info: { role: string }; parts: Array<{ type: string; text?: string }> }>)
         .filter((m) => m.info?.role === "assistant")
         .flatMap((m) => m.parts ?? [])
         .filter((p) => p.type === "text" && p.text)
@@ -401,26 +360,7 @@ ${transcriptText}
         .filter(Boolean)
         .join("\n");
 
-      // 5. Save app-level cost before deleting
-      try {
-        const cost = fetchOpencodeSessionCost(tempSessionId);
-        if (cost) {
-          await db.insert(schema.appCost).values({
-            id: crypto.randomUUID(),
-            type: "generate_notes",
-            ticketId: id,
-            costUsd: cost.costUsd,
-            totalTokens: cost.totalTokens,
-            createdAt: Date.now(),
-          });
-        }
-      } catch { /* best-effort */ }
-
-      // 6. Clean up — delete temp session
-      fetch(
-        `http://127.0.0.1:${port}/session/${tempSessionId}?directory=${encodeURIComponent(repo.localPath)}`,
-        { method: "DELETE" },
-      ).catch(() => {}); // fire-and-forget cleanup
+      // Temp session kept — cost data persists in opencode DB
 
       if (!notes) notes = "Session notes generated.";
 
@@ -475,8 +415,13 @@ ${transcriptText}
       .select()
       .from(schema.sessions)
       .where(inArray(schema.sessions.ticketId, body.ids));
-    for (const s of ticketSessions) {
-      deleteOpencodeSession(s.opencodeSessionId);
+    const port = await getAnyActivePort();
+    if (port) {
+      const client = createSdkClient(port);
+      for (const s of ticketSessions) {
+        if (!s.opencodeSessionId) continue;
+        try { await client.session.delete({ sessionID: s.opencodeSessionId }); } catch { /* best-effort */ }
+      }
     }
     await db.delete(schema.sessions).where(inArray(schema.sessions.ticketId, body.ids));
     await db.delete(schema.tickets).where(inArray(schema.tickets.id, body.ids));

@@ -75,8 +75,6 @@ export interface Session {
   filesChanged: string[];
   exitCode: number | null;
   exitReason: ExitReason | null;
-  promptTokens: number;
-  completionTokens: number;
   totalTokens: number;
   costUsd: number;
   createdAt: number;
@@ -147,8 +145,6 @@ export interface CostSummary {
   weekTotalTokens: number;
   ticketCount: number;
   sessionCount: number;
-  overheadUsd: number;
-  overheadTokens: number;
   perRepo: Array<{
     repoId: string;
     repoName: string;

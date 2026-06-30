@@ -70,7 +70,7 @@ export default function ActivityTimeline({ repoId, limit = 20 }: ActivityTimelin
 
           {/* Ticket title */}
           <button
-            onClick={() => navigate({ to: `/tickets/${s.ticketId}` })}
+            onClick={() => navigate({ to: `/tickets/${s.ticketId}`, search: repoId ? { repoId } : {} })}
             className="text-sm text-zinc-300 hover:text-blue-400 transition-colors truncate flex-1 min-w-0 text-left"
           >
             {s.ticketTitle}

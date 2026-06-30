@@ -5,7 +5,7 @@ import { isNull } from "drizzle-orm"
 import path from "path"
 import { db, schema } from "../db"
 import { isSessionAlive, registerRecoveredSession, stopAll } from "../server/opencode-manager"
-import { startCostWatcher } from "../server/cost-watcher"
+import { startSdkCostWatcher } from "../server/sdk-cost-watcher"
 import { sseEmitter, SSE_EVENT } from "../server/sse"
 import type { SseEvent } from "../server/sse"
 import * as handlers from "./handlers"
@@ -126,8 +126,9 @@ async function main() {
   // Recover orphaned sessions
   await recoverOrphanedSessions()
 
-  // Start background cost watcher (polls opencode DB every 3s)
-  startCostWatcher(3000)
+  // Start background cost watchers:
+  //   startSdkCostWatcher — fetches cost data from opencode via SDK
+  startSdkCostWatcher(3000)
 
   // Create main window
   const win = new BrowserWindow({

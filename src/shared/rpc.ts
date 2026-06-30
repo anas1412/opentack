@@ -106,7 +106,7 @@ export type OpenTackRPC = {
 
       // ─── Costs ──────────────────────────────────────────────
       costSummary: { params: void; response: CostSummary }
-      costHistory: { params: void; response: Array<{ date: string; costUsd: number; tokens: number }> }
+      costHistory: { params: void; response: Array<{ date: string; costUsd: number; tokens: number; sessionCount: number }> }
       costPerTicket: {
         params: { startDate?: string; endDate?: string; search?: string; repoId?: string }
         response: Array<{

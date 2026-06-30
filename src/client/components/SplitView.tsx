@@ -211,7 +211,7 @@ export default function SplitView() {
       {/* ── LEFT: ticket detail panel ── */}
       <div className="w-[480px] min-w-[480px] border-r border-zinc-800 flex flex-col bg-zinc-950">
         <div className="flex-1 overflow-hidden">
-          <TicketDetail ticketId={ticketId} onStartSession={handleStartSession} sessionActive={sessionActive} />
+          <TicketDetail ticketId={ticketId} onStartSession={handleStartSession} onStopSession={handleStopSession} sessionActive={sessionActive} />
         </div>
       </div>
 

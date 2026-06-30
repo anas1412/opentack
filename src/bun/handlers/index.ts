@@ -54,9 +54,14 @@ import {
   getSessionPid,
   isSessionAlive,
   registerRecoveredSession,
+  getAnyActivePort,
 } from "../../server/opencode-manager"
 
-import { enrichFromOpencode, deleteOpencodeSession, verifyOpencodeSession, fetchOpencodeSessionCost, getOpencodeDb, updateOpencodeSessionDirectory } from "../../server/routes/cost-utils"
+import { updateOpencodeSessionDirectory } from "../../server/routes/sqlite-helpers"
+import { createSdkClient, getGlobalConfig } from "../../shared/opencode-client"
+import { dailyCostHistory, aggregateOpencodeSessionsSince, getSingleSessionCost, queryOpencodeSessionsSince, enrichSessions } from "../../shared/opencode-db"
+import { sendToSession, generateAndSendImprovedPrompt } from "../../shared/prompt-improver"
+import { finalizeSessionCost, markSessionEnded, findOrCreateTicketSessionRow } from "../../shared/session-lifecycle"
 import { createWorktreeForTicket } from "../../server/routes/worktree"
 import { computeChangedFiles } from "../../server/routes/ticket"
 import { emitSse } from "../../server/sse"
@@ -276,35 +281,15 @@ export async function listTickets(params: {
       .where(inArray(schema.sessions.ticketId, ticketIds))
 
     const ocSessionIds = allSessions.map((s) => s.opencodeSessionId).filter(Boolean) as string[]
-    const ocCostMap = new Map<string, { cost: number; tokens: number }>()
-    if (ocSessionIds.length > 0) {
-      const ocDb = getOpencodeDb()
-      if (ocDb) {
-        try {
-          const placeholders = ocSessionIds.map(() => "?").join(",")
-          const ocRows = ocDb
-            .query(
-              `SELECT id, cost, tokens_input + tokens_output as tokens
-               FROM session WHERE id IN (${placeholders})`,
-            )
-            .all(...ocSessionIds) as { id: string; cost: number; tokens: number }[]
-          for (const r of ocRows) ocCostMap.set(r.id, { cost: r.cost, tokens: r.tokens })
-        } finally {
-          ocDb.close()
-        }
-      }
-    }
+    const enriched = enrichSessions(allSessions)
 
     // Sum costs per ticket (skip chat sessions with no ticketId)
     const costByTicket = new Map<string, { costUsd: number; totalTokens: number }>()
-    for (const s of allSessions) {
+    for (const s of enriched) {
       if (!s.ticketId) continue
-      const oc = s.opencodeSessionId ? ocCostMap.get(s.opencodeSessionId) : null
-      const costUsd = oc?.cost ?? s.costUsd
-      const totalTokens = oc?.tokens ?? s.totalTokens
       const existing = costByTicket.get(s.ticketId) ?? { costUsd: 0, totalTokens: 0 }
-      existing.costUsd += costUsd
-      existing.totalTokens += totalTokens
+      existing.costUsd += s.costUsd
+      existing.totalTokens += s.totalTokens
       costByTicket.set(s.ticketId, existing)
     }
 
@@ -316,24 +301,7 @@ export async function listTickets(params: {
       }
     }
 
-    // Include app-level overhead costs
-    const appCosts = await db
-      .select({
-        ticketId: schema.appCost.ticketId,
-        costUsd: schema.appCost.costUsd,
-        totalTokens: schema.appCost.totalTokens,
-      })
-      .from(schema.appCost)
-      .where(inArray(schema.appCost.ticketId, ticketIds))
 
-    for (const ac of appCosts) {
-      if (!ac.ticketId) continue
-      const ticket = tickets.find((t) => t.id === ac.ticketId)
-      if (ticket) {
-        ticket.totalCostUsd = (ticket.totalCostUsd || 0) + ac.costUsd
-        ticket.totalTokens = (ticket.totalTokens || 0) + ac.totalTokens
-      }
-    }
   }
 
   return {
@@ -350,14 +318,9 @@ export async function getTicket(params: { id: string }): Promise<Ticket> {
 
   // Enrich cost from opencode by summing all sessions
   const sessions = await db.select().from(schema.sessions).where(eq(schema.sessions.ticketId, params.id))
-
-  let realCost = 0
-  let realTokens = 0
-  for (const s of sessions) {
-    const enriched = enrichFromOpencode(s.opencodeSessionId, { costUsd: s.costUsd, totalTokens: s.totalTokens })
-    realCost += enriched.costUsd
-    realTokens += enriched.totalTokens
-  }
+  const enriched = enrichSessions(sessions)
+  const realCost = enriched.reduce((sum, s) => sum + s.costUsd, 0)
+  const realTokens = enriched.reduce((sum, s) => sum + s.totalTokens, 0)
 
   // Compute files changed live from git diff
   const liveFiles = await computeChangedFiles(row[0])
@@ -557,14 +520,17 @@ export async function updateTicket(params: { id: string } & TicketUpdateInput): 
   // Rename opencode sessions if title changed
   if (data.title && data.title !== existing[0].title) {
     try {
-      const { updateOpencodeSessionTitle } = await import("../../server/routes/cost-utils")
-      const sessions = await db
-        .select({ opencodeSessionId: schema.sessions.opencodeSessionId })
-        .from(schema.sessions)
-        .where(eq(schema.sessions.ticketId, params.id))
-      for (const s of sessions) {
-        if (s.opencodeSessionId) {
-          updateOpencodeSessionTitle(s.opencodeSessionId, data.title)
+      const port = await getAnyActivePort()
+      if (port) {
+        const client = createSdkClient(port)
+        const sessions = await db
+          .select({ opencodeSessionId: schema.sessions.opencodeSessionId })
+          .from(schema.sessions)
+          .where(eq(schema.sessions.ticketId, params.id))
+        for (const s of sessions) {
+          if (s.opencodeSessionId) {
+            client.session.update({ sessionID: s.opencodeSessionId, title: data.title }).catch(() => {})
+          }
         }
       }
     } catch {}
@@ -586,16 +552,17 @@ export async function deleteTicket(params: { id: string }): Promise<void> {
 
   // Delete associated sessions
   const sessions = await db.select().from(schema.sessions).where(eq(schema.sessions.ticketId, params.id))
+  const port = await getAnyActivePort()
   for (const s of sessions) {
-    if (s.opencodeSessionId) {
-      try { deleteOpencodeSession(s.opencodeSessionId) } catch {}
+    if (s.opencodeSessionId && port) {
+      try {
+        const client = createSdkClient(port)
+        client.session.delete({ sessionID: s.opencodeSessionId }).catch(() => {})
+      } catch {}
     }
     stopSessionServer(s.id)
   }
   await db.delete(schema.sessions).where(eq(schema.sessions.ticketId, params.id))
-
-  // Delete app costs
-  await db.delete(schema.appCost).where(eq(schema.appCost.ticketId, params.id))
 
   await db.delete(schema.tickets).where(eq(schema.tickets.id, params.id))
   emitSse({ type: "ticket.deleted", ticketId: params.id })
@@ -657,40 +624,41 @@ Description: ${ticket.description?.slice(0, 300) ?? ""}
 ${transcriptText}
 </transcript>`
 
-  // ── 4. Run opencode CLI with the prompt (no server needed — self-contained) ──
-  const settings = await getSettings()
-  const opencodeCfg = await getOpencodeConfig()
-  const modelFlag = settings.model ? ["--model", settings.model] : []
-  const cfgAgent = opencodeCfg.default_agent || ""
-  const agentFlag = (cfgAgent && cfgAgent !== "auto" && cfgAgent !== "ask") ? ["--agent", cfgAgent] : []
-  const runProc = Bun.spawn(["opencode", "run", ...modelFlag, ...agentFlag, prompt], {
-    stdio: ["ignore", "pipe", "pipe"],
-    env: { ...process.env },
-  })
-  const [runStdout, runStderr] = await Promise.all([
-    new Response(runProc.stdout).text(),
-    new Response(runProc.stderr).text(),
-  ])
-  const runExit = await runProc.exited
-  if (runExit !== 0) throw new Error(`Failed to generate notes: ${runStderr.slice(0, 200)}`)
+  // ── 4. Generate notes via SDK (creates temp session; cost persists in opencode DB) ──
+  const port = await getAnyActivePort()
+  if (!port) throw new Error("No active opencode server found")
+  const client = createSdkClient(port)
 
-  const notes = runStdout.trim() || "Session notes generated."
+  const createResult = await client.session.create({
+    title: "summarize",
+  })
+  const tempSessionId = ((createResult.data as any)?.id ?? (createResult as any).id) as string
+  if (!tempSessionId) throw new Error("Failed to create temp session")
+
+  await client.session.prompt({
+    sessionID: tempSessionId,
+    parts: [{ type: "text", text: prompt }],
+  })
+
+  const msgResult = await client.session.messages({ sessionID: tempSessionId })
+  const messages = Array.isArray(msgResult.data) ? msgResult.data : []
+
+  let notes = (messages as Array<{ info: { role: string }; parts: Array<{ type: string; text?: string }> }>)
+    .filter((m) => m.info?.role === "assistant")
+    .flatMap((m) => m.parts ?? [])
+    .filter((p) => p.type === "text" && p.text)
+    .map((p) => p.text!.trim())
+    .filter(Boolean)
+    .join("\n")
+  if (!notes) notes = "Session notes generated."
 
   // ── 5. Save to ticket ──
   await db.update(schema.tickets).set({ notes, updatedAt: Date.now() }).where(eq(schema.tickets.id, params.id))
 
-  // ── 6. Cost from export data (best-effort) ──
-  const costUsd = exportData.info?.cost ?? 0
-  try {
-    await db.insert(schema.appCost).values({
-      id: randomUUID(),
-      type: "generate_notes",
-      ticketId: params.id,
-      costUsd,
-      totalTokens: exportData.info?.tokens?.input + exportData.info?.tokens?.output || 0,
-      createdAt: Date.now(),
-    })
-  } catch { /* best-effort */ }
+  // ── 6. Read cost from temp session (kept in opencode DB) ──
+  const getResult = await client.session.get({ sessionID: tempSessionId })
+  const s = getResult.data as any
+  const costUsd = s?.cost ?? 0
 
   return { notes, costUsd }
 }
@@ -717,137 +685,7 @@ export async function batchDeleteTickets(params: { ids: string[] }): Promise<voi
 // Track which sessions are currently improving their prompts
 const improvingSessions = new Map<string, boolean>()
 
-/**
- * Send a plain text message to an opencode session.
- */
-async function sendToSession(
-  port: number,
-  repoPath: string,
-  sessionId: string,
-  text: string,
-  noReply = false,
-  retries = 3,
-): Promise<void> {
-  const url = `http://127.0.0.1:${port}/session/${sessionId}/message?directory=${encodeURIComponent(repoPath)}`
-  for (let attempt = 0; attempt < retries; attempt++) {
-    try {
-      const res = await fetch(url, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ noReply, parts: [{ type: "text", text }] }),
-      })
-      if (res.ok) return
-      const body = await res.text().catch(() => "unknown")
-      // Retry on server errors (5xx) — not on client errors (4xx)
-      if (res.status < 500 || attempt === retries - 1) {
-        throw new Error(`Failed to send message: ${res.status} ${body.slice(0, 200)}`)
-      }
-    } catch (e) {
-      if (attempt === retries - 1) throw e
-    }
-    await new Promise((r) => setTimeout(r, 500))
-  }
-}
 
-/**
- * Generate and send an improved prompt using a temporary opencode session.
- */
-async function generateAndSendImprovedPrompt(
-  port: number,
-  repoPath: string,
-  opencodeSessionId: string,
-  description: string,
-  model: OpencodeModel | undefined,
-  agent: string | undefined,
-  onInjecting?: () => void,
-): Promise<void> {
-  const tempLabel = `improve-${randomUUID().slice(0, 8)}`
-
-  try {
-    // 1. Create a temporary session on the same server
-    const tempSessionId = await createOpencodeSession(port, repoPath, tempLabel, 1, model, agent)
-
-    try {
-      // 2. Build improvement prompt
-      const improvementPrompt = `Rewrite the following task description into a detailed, well-structured prompt for an AI coding assistant.
-
-Rules:
-- Do NOT use any tools, read any files, or scan the repository.
-- Only rewrite the text below. Do not add information from anywhere else.
-- Return ONLY the rewritten prompt. No explanations, no prefixes, no markdown formatting.
-
-Original description:
-${description}
-
-Prompt:`
-
-      // 3. Send to temp session
-      const msgRes = await fetch(
-        `http://127.0.0.1:${port}/session/${tempSessionId}/message?directory=${encodeURIComponent(repoPath)}`,
-        {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            parts: [{ type: "text", text: improvementPrompt }],
-          }),
-        },
-      )
-      if (!msgRes.ok) throw new Error(`Failed to send improvement prompt: ${msgRes.status}`)
-
-      // 4. Wait for AI to finish
-      await fetch(
-        `http://127.0.0.1:${port}/api/session/${tempSessionId}/wait`,
-        { method: "POST" },
-      )
-
-      // 5. Read the AI response
-      const msgListRes = await fetch(
-        `http://127.0.0.1:${port}/session/${tempSessionId}/message?directory=${encodeURIComponent(repoPath)}`,
-      )
-      type Msg = { info: { role: string }; parts: Array<{ type: string; text?: string }> }
-      const messages = await msgListRes.json() as Msg[]
-
-      const improved = (Array.isArray(messages) ? messages : [])
-        .filter((m) => m.info?.role === "assistant")
-        .flatMap((m) => m.parts ?? [])
-        .filter((p) => p.type === "text" && p.text)
-        .map((p) => p.text!.trim())
-        .filter(Boolean)
-        .join("\n")
-
-      // 6. Save app-level cost before deleting
-      try {
-        const cost = fetchOpencodeSessionCost(tempSessionId)
-        if (cost) {
-          await db.insert(schema.appCost).values({
-            id: randomUUID(),
-            type: "improve_prompt",
-            ticketId: null,
-            costUsd: cost.costUsd,
-            totalTokens: cost.totalTokens,
-            createdAt: Date.now(),
-          })
-        }
-      } catch { /* best-effort */ }
-
-      // 7. Send the improved prompt (or original as fallback) to the real session
-      const sendPromise = sendToSession(port, repoPath, opencodeSessionId, improved || description)
-      onInjecting?.()
-      await sendPromise
-    } finally {
-      // Clean up temp session
-      fetch(
-        `http://127.0.0.1:${port}/session/${tempSessionId}?directory=${encodeURIComponent(repoPath)}`,
-        { method: "DELETE" },
-      ).catch(() => {})
-    }
-  } catch (err) {
-    console.warn("[handlers] Failed to generate improved prompt, sending raw description:", (err as Error).message)
-    const sendPromise = sendToSession(port, repoPath, opencodeSessionId, description).catch(() => {})
-    onInjecting?.()
-    await sendPromise
-  }
-}
 
 export async function recentSessions(params: { limit?: number; offset?: number; repoId?: string }): Promise<Array<Session & { ticketTitle: string | null; repoId: string | null; repoName: string | null }>> {
   const limit = params.limit ?? 15
@@ -875,40 +713,9 @@ export async function recentSessions(params: { limit?: number; offset?: number; 
     ticketTitle: r.ticketTitle ?? null,
     repoId: r.repoId ?? null,
     repoName: r.repoName ?? null,
-  })) as Array<Session & { ticketTitle: string | null; repoId: string | null; repoName: string | null }>
+  }))
 
-  // Batch-enrich with real token/cost data from opencode DB
-  const ocDb = getOpencodeDb()
-  if (ocDb) {
-    try {
-      const sessionIds = mapped
-        .map((r) => r.opencodeSessionId)
-        .filter((id): id is string => id !== null)
-
-      if (sessionIds.length > 0) {
-        const placeholders = sessionIds.map(() => "?").join(",")
-        const opencodeRows = ocDb
-          .query(
-            `SELECT id, cost, tokens_input + tokens_output as total_tokens
-             FROM session WHERE id IN (${placeholders})`,
-          )
-          .all(...sessionIds) as { id: string; cost: number; total_tokens: number }[]
-
-        const ocMap = new Map(opencodeRows.map((r) => [r.id, r]))
-        for (const row of mapped) {
-          if (row.opencodeSessionId && ocMap.has(row.opencodeSessionId)) {
-            const oc = ocMap.get(row.opencodeSessionId)!
-            row.costUsd = oc.cost
-            row.totalTokens = oc.total_tokens
-          }
-        }
-      }
-    } finally {
-      ocDb.close()
-    }
-  }
-
-  return mapped
+  return enrichSessions(mapped) as Array<Session & { ticketTitle: string | null; repoId: string | null; repoName: string | null }>
 }
 
 function parseSessionRow(row: any): Session {
@@ -927,14 +734,9 @@ export async function ticketSessions(params: { ticketId: string }): Promise<Sess
     .where(eq(schema.sessions.ticketId, params.ticketId))
     .orderBy(desc(schema.sessions.createdAt))
 
-  // Enrich with live costs from opencode DB
-  return rows.map(parseSessionRow).map((s) => {
-    const enriched = enrichFromOpencode(s.opencodeSessionId ?? null, {
-      costUsd: s.costUsd,
-      totalTokens: s.totalTokens,
-    })
-    return { ...s, costUsd: enriched.costUsd, totalTokens: enriched.totalTokens }
-  })
+  const parsed = rows.map(parseSessionRow)
+
+  return enrichSessions(parsed)
 }
 
 export async function getSession(params: { id: string }): Promise<Session> {
@@ -955,118 +757,17 @@ export async function createSession(params: { ticketId: string }) {
   if (ticket.worktreePath && existsSync(ticket.worktreePath)) {
     sessionCwd = ticket.worktreePath
   } else if (ticket.worktreePath) {
-    // Worktree path missing — clear and create new
     await db.update(schema.tickets).set({ worktreePath: null, updatedAt: Date.now() }).where(eq(schema.tickets.id, ticket.id))
     sessionCwd = await createWorktreeForTicket(ticket, repo)
   } else {
     sessionCwd = await createWorktreeForTicket(ticket, repo)
   }
 
-  // Find existing session for this ticket (reuse to preserve conversation history)
-  const [existingSession] = await db
-    .select()
-    .from(schema.sessions)
-    .where(eq(schema.sessions.ticketId, params.ticketId))
-    .limit(1)
+  // Find or create session row + start opencode server
+  const { sessionId, opencodePort: port, opencodeSessionId: existingId, existingSession } =
+    await findOrCreateTicketSessionRow(ticket, sessionCwd)
 
-  let sessionId: string
-  let opencodeSessionId: string | null = null
-
-  if (existingSession) {
-    // Reuse — keep the opencodeSessionId for history continuity
-    sessionId = existingSession.id
-    opencodeSessionId = existingSession.opencodeSessionId
-
-    // If the opencode session was deleted from opencode's DB, clear it so we create a fresh one
-    if (opencodeSessionId && !verifyOpencodeSession(opencodeSessionId)) {
-      console.warn(`[session] opencode session ${opencodeSessionId} not found in opencode DB — will create new one`)
-      opencodeSessionId = null
-    }
-
-    // Update the opencode session's directory to match the current cwd (e.g. worktree path)
-    if (opencodeSessionId) {
-      updateOpencodeSessionDirectory(opencodeSessionId, sessionCwd)
-    }
-
-    // Reset session end state so it appears active again
-    await db
-      .update(schema.sessions)
-      .set({
-        exitCode: null,
-        exitReason: null,
-        endedAt: null,
-        durationMs: null,
-        cwd: sessionCwd,
-        branch: ticket.branch,
-        createdAt: Date.now(), // bump for timeline sort
-      })
-      .where(eq(schema.sessions.id, sessionId))
-  } else {
-    // Create new session row
-    sessionId = randomUUID()
-    await db.insert(schema.sessions).values({
-      id: sessionId,
-      ticketId: params.ticketId,
-      opencodeVersion: "latest",
-      model: "unknown",
-      cwd: sessionCwd,
-      branch: ticket.branch,
-      initialPrompt: ticket.description,
-      opencodeSessionId: null,
-      transcript: "[]",
-      diff: "[]",
-      filesChanged: "[]",
-      exitCode: null,
-      exitReason: null,
-      promptTokens: 0,
-      completionTokens: 0,
-      totalTokens: 0,
-      costUsd: 0,
-      createdAt: Date.now(),
-      endedAt: null,
-      durationMs: null,
-      approved: null,
-      revisionNote: null,
-    })
-  }
-
-  // Update ticket status + active session
-  const now = Date.now()
-  await db
-    .update(schema.tickets)
-    .set({
-      status: "in_progress",
-      activeSessionId: sessionId,
-      updatedAt: now,
-    })
-    .where(eq(schema.tickets.id, params.ticketId))
-
-  emitSse({ type: "session.started", sessionId, ticketId: params.ticketId })
-
-  // Start opencode serve for this session
-  let port: number
-  try {
-    port = await startSessionServer(sessionId, sessionCwd)
-    // Persist PID + port for orphan recovery
-    const pid = getSessionPid(sessionId)
-    if (pid) {
-      await db
-        .update(schema.sessions)
-        .set({ pid, serverPort: port })
-        .where(eq(schema.sessions.id, sessionId))
-    }
-  } catch (err) {
-    console.error("[session] Failed to start opencode server:", err)
-    await db
-      .update(schema.sessions)
-      .set({ exitCode: -1, exitReason: "error", endedAt: Date.now() })
-      .where(eq(schema.sessions.id, sessionId))
-    await db
-      .update(schema.tickets)
-      .set({ status: "open", activeSessionId: null, updatedAt: Date.now() })
-      .where(eq(schema.tickets.id, params.ticketId))
-    throw new Error("Could not start opencode server. Check that opencode is installed and in your PATH.")
-  }
+  let opencodeSessionId = existingId
 
   // Update model on new sessions only (reused sessions keep old model)
   if (!existingSession) {
@@ -1077,7 +778,7 @@ export async function createSession(params: { ticketId: string }) {
       .where(eq(schema.sessions.id, sessionId))
   }
 
-  // Create opencode session if we don't have one (or the old one was missing)
+  // Create opencode session if we don't have one
   if (!opencodeSessionId) {
     try {
       const settings = await getSettings()
@@ -1115,27 +816,11 @@ export async function createSession(params: { ticketId: string }) {
 }
 
 export async function stopSession(params: { id: string }): Promise<void> {
-  const session = await db.select().from(schema.sessions).where(eq(schema.sessions.id, params.id)).limit(1)
-  if (!session[0]) throw new Error("Session not found")
+  const [session] = await db.select().from(schema.sessions).where(eq(schema.sessions.id, params.id)).limit(1)
+  if (!session) throw new Error("Session not found")
 
-  const now = Date.now()
-  const durationMs = session[0].createdAt ? now - session[0].createdAt : null
-
-  await db
-    .update(schema.sessions)
-    .set({ endedAt: now, durationMs, exitCode: 0, exitReason: "user_stopped" })
-    .where(eq(schema.sessions.id, params.id))
-
-  // Clear active session on ticket
-  if (session[0].ticketId) {
-    await db
-      .update(schema.tickets)
-      .set({ activeSessionId: null, updatedAt: now })
-      .where(eq(schema.tickets.id, session[0].ticketId))
-  }
-
-  stopSessionServer(params.id)
-  emitSse({ type: "session.stopped", sessionId: params.id, ticketId: session[0].ticketId })
+  finalizeSessionCost(session.opencodeSessionId)
+  await markSessionEnded(params.id, session.ticketId, session.createdAt)
 }
 
 export async function improveSession(params: { id: string; description?: string }): Promise<void> {
@@ -1164,10 +849,12 @@ export async function improveSession(params: { id: string; description?: string 
       sess[0].cwd || "",
       sess[0].opencodeSessionId,
       description,
-      parseModel(settings.model),
-      agent,
-      () => {
-        emitSse({ type: "session.improving.injecting", sessionId: params.id })
+      {
+        model: parseModel(settings.model),
+        agent,
+        onInjecting: () => {
+          emitSse({ type: "session.improving.injecting", sessionId: params.id })
+        },
       },
     )
   } finally {
@@ -1196,7 +883,18 @@ export async function sendSessionMessage(params: { id: string; text: string }): 
   if (!port) throw new Error("Session not running")
   if (!session[0].opencodeSessionId) throw new Error("Session has no opencode session")
 
-  await sendToSession(port, session[0].cwd!, session[0].opencodeSessionId, params.text)
+  try {
+    await sendToSession(port, session[0].cwd!, session[0].opencodeSessionId, params.text)
+  } catch {
+    // Session may have been removed from opencode's DB — create a replacement
+    console.warn(`[session] send failed for ${session[0].opencodeSessionId}, creating replacement`)
+    const newId = await createOpencodeSession(port, session[0].cwd!, session[0].ticketId || session[0].id, 10)
+    await db
+      .update(schema.sessions)
+      .set({ opencodeSessionId: newId })
+      .where(eq(schema.sessions.id, params.id))
+    await sendToSession(port, session[0].cwd!, newId, params.text)
+  }
 }
 
 export async function sessionBranch(params: { id: string }): Promise<{ branch: string }> {
@@ -1252,10 +950,6 @@ export async function createChat(params: { repoId: string; model?: string; promp
     filesChanged: toJsonField([]),
     exitCode: null,
     exitReason: null,
-    promptTokens: 0,
-    completionTokens: 0,
-    totalTokens: 0,
-    costUsd: 0,
     createdAt: now,
     endedAt: null,
     durationMs: null,
@@ -1273,47 +967,8 @@ export async function stopChat(params: { sessionId: string }): Promise<void> {
   const [session] = await db.select().from(schema.sessions).where(eq(schema.sessions.id, params.sessionId)).limit(1)
   if (!session) throw new Error("Chat not found")
 
-  // Read cost from opencode DB before closing
-  let costUsd = 0
-  let totalTokens = 0
-  if (session.opencodeSessionId) {
-    try {
-      const cost = fetchOpencodeSessionCost(session.opencodeSessionId)
-      if (cost) {
-        costUsd = cost.costUsd
-        totalTokens = cost.totalTokens
-      }
-    } catch { /* best-effort */ }
-  }
-
-  // Record in app_cost
-  await db.insert(schema.appCost).values({
-    id: randomUUID(),
-    type: "chat",
-    ticketId: null,
-    costUsd,
-    totalTokens,
-    createdAt: Date.now(),
-  })
-
-  // Kill the opencode server
-  stopSessionServer(params.sessionId)
-
-  // Mark as ended with cost
-  await db
-    .update(schema.sessions)
-    .set({
-      exitCode: 0,
-      exitReason: "user_stopped",
-      endedAt: Date.now(),
-      costUsd,
-      totalTokens,
-      pid: null,
-      serverPort: null,
-    })
-    .where(eq(schema.sessions.id, params.sessionId))
-
-  emitSse({ type: "session.stopped", sessionId: params.sessionId, ticketId: null })
+  finalizeSessionCost(session.opencodeSessionId)
+  await markSessionEnded(params.sessionId, null, null)
 }
 
 export async function listChats(): Promise<Session[]> {
@@ -1339,118 +994,55 @@ export async function getChat(params: { id: string }): Promise<Session> {
 
 // ─── Costs ─────────────────────────────────────────────────────────────
 
+/** Find a port for any active opencode server by scanning OpenTack's sessions table. */
 export async function costSummary(): Promise<CostSummary> {
   const weekAgo = Date.now() - 7 * 24 * 60 * 60 * 1000
-  const ocDb = getOpencodeDb()
 
-  if (!ocDb) {
-    return {
-      weekTotalUsd: 0,
-      weekTotalTokens: 0,
-      sessionCount: 0,
-      ticketCount: 0,
-      overheadUsd: 0,
-      overheadTokens: 0,
-      perRepo: [],
-    }
+  // Global totals from opencode DB (all sessions, all repos)
+  const global = aggregateOpencodeSessionsSince(weekAgo)
+
+  // Per-repo breakdown from opencode DB directory field (covers ALL sessions, not just OpenTack-tracked)
+  const ocSessions = queryOpencodeSessionsSince(weekAgo)
+
+  // Map opencode directories to OpenTack repos
+  const allRepos = await db.select().from(schema.repos)
+  const sortedRepos = [...allRepos].sort((a, b) => b.localPath.length - a.localPath.length) // longest first for prefix match
+  const worktreesRoot = getOpenTackWorktreesDir()
+  function repoForDir(dir: string | null): { id: string; name: string } | undefined {
+    if (!dir) return undefined
+    return sortedRepos.find((r) => dir.startsWith(r.localPath) || dir.startsWith(worktreesRoot + "/" + r.name + "/"))
   }
 
-  try {
-    const totals = ocDb
-      .query(
-        `SELECT
-           COALESCE(SUM(cost), 0) as total_cost,
-           COALESCE(SUM(tokens_input + tokens_output), 0) as total_tokens,
-           COUNT(*) as session_count
-         FROM session
-         WHERE time_created > ?`,
-      )
-      .get(weekAgo) as { total_cost: number; total_tokens: number; session_count: number }
+  const perRepoMap = new Map<string, { repoId: string; repoName: string; usd: number; tokens: number; sessionCount: number }>()
+  for (const s of ocSessions) {
+    const repo = repoForDir(s.directory)
+    if (!repo) continue
+    const existing = perRepoMap.get(repo.id) ?? { repoId: repo.id, repoName: repo.name, usd: 0, tokens: 0, sessionCount: 0 }
+    existing.usd += s.cost
+    existing.tokens += s.tokensInput + s.tokensOutput + s.tokensReasoning
+    existing.sessionCount++
+    perRepoMap.set(repo.id, existing)
+  }
 
-    const perDirRows = ocDb
-      .query(
-        `SELECT
-           directory,
-           COALESCE(SUM(cost), 0) as cost,
-           COALESCE(SUM(tokens_input + tokens_output), 0) as tokens,
-           COUNT(*) as sessions
-         FROM session
-         WHERE time_created > ?
-         GROUP BY directory`,
-      )
-      .all(weekAgo) as { directory: string; cost: number; tokens: number; sessions: number }[]
+  // ticketCount from OpenTack sessions (still useful for ticket tracking)
+  const ticketSessions = await db
+    .select({ ticketId: schema.sessions.ticketId })
+    .from(schema.sessions)
+    .where(and(gte(schema.sessions.createdAt, weekAgo), isNotNull(schema.sessions.ticketId)))
+  const ticketIds = new Set(ticketSessions.map((s) => s.ticketId).filter(Boolean) as string[])
 
-    const allRepos = await db.select().from(schema.repos)
-    const pathToRepo = new Map(allRepos.map((r) => [r.localPath, { id: r.id, name: r.name }]))
-
-    const perRepoMap = new Map<string, { repoId: string; repoName: string; usd: number; tokens: number; sessionCount: number }>()
-    for (const d of perDirRows) {
-      const repo = pathToRepo.get(d.directory)
-      if (!repo) continue
-      const existing = perRepoMap.get(repo.id) ?? { repoId: repo.id, repoName: repo.name, usd: 0, tokens: 0, sessionCount: 0 }
-      existing.usd += d.cost
-      existing.tokens += d.tokens
-      existing.sessionCount += d.sessions
-      perRepoMap.set(repo.id, existing)
-    }
-
-    const [ticketCount] = await db
-      .select({ count: sql<number>`COUNT(DISTINCT ${schema.tickets.id})` })
-      .from(schema.tickets)
-      .where(gte(schema.tickets.createdAt, weekAgo))
-
-    let overheadUsd = 0
-    let overheadTokens = 0
-    try {
-      const [overhead] = await db
-        .select({
-          costUsd: sql<number>`COALESCE(SUM(${schema.appCost.costUsd}), 0)`,
-          totalTokens: sql<number>`COALESCE(SUM(${schema.appCost.totalTokens}), 0)`,
-        })
-        .from(schema.appCost)
-        .where(gte(schema.appCost.createdAt, weekAgo))
-      overheadUsd = overhead.costUsd
-      overheadTokens = overhead.totalTokens
-    } catch {}
-
-    return {
-      weekTotalUsd: totals.total_cost,
-      weekTotalTokens: totals.total_tokens,
-      sessionCount: totals.session_count,
-      ticketCount: ticketCount.count,
-      perRepo: Array.from(perRepoMap.values()),
-      overheadUsd,
-      overheadTokens,
-    }
-  } finally {
-    ocDb.close()
+  return {
+    weekTotalUsd: global.totalUsd,
+    weekTotalTokens: global.totalTokens,
+    sessionCount: global.sessionCount,
+    ticketCount: ticketIds.size,
+    perRepo: Array.from(perRepoMap.values()),
   }
 }
 
-export async function costHistory(): Promise<Array<{ date: string; costUsd: number; tokens: number }>> {
+export async function costHistory(): Promise<Array<{ date: string; costUsd: number; tokens: number; sessionCount: number }>> {
   const thirtyDaysAgo = Date.now() - 30 * 24 * 60 * 60 * 1000
-
-  const sessions = await db
-    .select()
-    .from(schema.sessions)
-    .where(gte(schema.sessions.createdAt, thirtyDaysAgo))
-
-  const dailyMap = new Map<string, { costUsd: number; tokens: number }>()
-
-  for (const s of sessions) {
-    const day = new Date(s.createdAt).toISOString().slice(0, 10)
-    const entry = dailyMap.get(day) || { costUsd: 0, tokens: 0 }
-    if (s.opencodeSessionId) {
-      const cost = enrichFromOpencode(s.opencodeSessionId, { costUsd: 0, totalTokens: 0 })
-      entry.costUsd += cost.costUsd
-      entry.tokens += cost.totalTokens
-    }
-    dailyMap.set(day, entry)
-  }
-
-  return Array.from(dailyMap.entries())
-    .sort(([a], [b]) => a.localeCompare(b))
-    .map(([date, data]) => ({ date, ...data }))
+  return dailyCostHistory(thirtyDaysAgo)
 }
 
 export async function costPerTicket(params: { startDate?: string; endDate?: string; search?: string; repoId?: string }) {
@@ -1470,9 +1062,14 @@ export async function costPerTicket(params: { startDate?: string; endDate?: stri
       ...(params.repoId ? [eq(schema.tickets.repoId, params.repoId)] : []),
     ))
 
+  // Enrich with opencode DB costs
+  const enrichedSessions = enrichSessions(sessions.map((s) => s.session))
+
   const perTicket = new Map<string, { title: string; repoName: string; models: Map<string, { costUsd: number; tokens: number }> }>()
 
-  for (const { session, ticketTitle, repoName } of sessions) {
+  for (let i = 0; i < sessions.length; i++) {
+    const { session, ticketTitle, repoName } = sessions[i]
+    const cost = enrichedSessions[i]
     if (!session.ticketId) continue
     const key = session.ticketId
     if (!perTicket.has(key)) {
@@ -1484,11 +1081,8 @@ export async function costPerTicket(params: { startDate?: string; endDate?: stri
       entry.models.set(modelKey, { costUsd: 0, tokens: 0 })
     }
     const m = entry.models.get(modelKey)!
-    if (session.opencodeSessionId) {
-      const cost = enrichFromOpencode(session.opencodeSessionId, { costUsd: 0, totalTokens: 0 })
-      m.costUsd += cost.costUsd
-      m.tokens += cost.totalTokens
-    }
+    m.costUsd += cost.costUsd
+    m.tokens += cost.totalTokens
   }
 
   return Array.from(perTicket.entries()).map(([ticketId, data]) => ({
@@ -1514,9 +1108,12 @@ export async function costPerModel(params: { startDate?: string; endDate?: strin
       ...(params.endDate ? [lte(schema.sessions.createdAt, new Date(params.endDate).getTime())] : []),
     ))
 
+  // Enrich with opencode DB costs
+  const enriched = enrichSessions(sessions)
+
   const perModel = new Map<string, { costUsd: number; tokens: number; sessions: Set<string>; tickets: Set<string> }>()
 
-  for (const s of sessions) {
+  for (const s of enriched) {
     const key = s.model || "unknown"
     if (!perModel.has(key)) {
       perModel.set(key, { costUsd: 0, tokens: 0, sessions: new Set(), tickets: new Set() })
@@ -1524,11 +1121,8 @@ export async function costPerModel(params: { startDate?: string; endDate?: strin
     const entry = perModel.get(key)!
     entry.sessions.add(s.ticketId || "")
     if (s.ticketId) entry.tickets.add(s.ticketId)
-    if (s.opencodeSessionId) {
-      const cost = enrichFromOpencode(s.opencodeSessionId, { costUsd: 0, totalTokens: 0 })
-      entry.costUsd += cost.costUsd
-      entry.tokens += cost.totalTokens
-    }
+    entry.costUsd += s.costUsd
+    entry.tokens += s.totalTokens
   }
 
   return Array.from(perModel.entries()).map(([model, data]) => ({
@@ -1567,7 +1161,8 @@ export async function updateSettings(params: Partial<Settings>): Promise<Setting
 
 // ─── Opencode Config ───────────────────────────────────────────────────
 
-export async function getOpencodeConfig(): Promise<OpencodeConfig> {
+/** Read config directly from file (fallback, also used by updateOpencodeConfig). */
+async function readFileConfig(): Promise<OpencodeConfig> {
   try {
     return JSON.parse(readFileSync(OPENCONFIG_PATH, "utf-8"))
   } catch {
@@ -1575,9 +1170,23 @@ export async function getOpencodeConfig(): Promise<OpencodeConfig> {
   }
 }
 
+/**
+ * Read opencode config — tries SDK first (via any active server), falls back to file.
+ */
+export async function getOpencodeConfig(): Promise<OpencodeConfig> {
+  const port = await getAnyActivePort()
+  if (port) {
+    try {
+      const client = createSdkClient(port)
+      return await getGlobalConfig(client)
+    } catch { /* fall through to file */ }
+  }
+  return readFileConfig()
+}
+
 export async function updateOpencodeConfig(params: Partial<OpencodeConfig>): Promise<OpencodeConfig> {
   const data = opencodeConfigUpdateSchema.parse(params)
-  const current = await getOpencodeConfig()
+  const current = await readFileConfig()
   const merged = { ...current, ...data }
   // Remove default_agent if set to empty (means "let opencode decide")
   if (merged.default_agent === "") {

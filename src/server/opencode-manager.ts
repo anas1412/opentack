@@ -2,6 +2,8 @@ import { spawn, type ChildProcess, execSync } from "child_process";
 import { readFileSync, existsSync } from "fs";
 import { homedir } from "os";
 import path from "path";
+import { and, isNull, sql } from "drizzle-orm";
+import { db, schema } from "../db";
 
 interface ServerInstance {
   proc: ChildProcess;
@@ -135,6 +137,25 @@ export function getSessionPort(sessionId: string): number | undefined {
 /** Get the PID for a running session's server, or undefined */
 export function getSessionPid(sessionId: string): number | undefined {
   return servers.get(sessionId)?.pid;
+}
+
+/**
+ * Find any active opencode server port by querying the sessions table.
+ * Since all `opencode serve` processes share the same global SQLite DB,
+ * any active server can serve as a proxy for SDK operations.
+ */
+export async function getAnyActivePort(): Promise<number | null> {
+  const row = await db
+    .select({ serverPort: schema.sessions.serverPort })
+    .from(schema.sessions)
+    .where(
+      and(
+        isNull(schema.sessions.endedAt),
+        sql`${schema.sessions.serverPort} IS NOT NULL`,
+      ),
+    )
+    .limit(1);
+  return row[0]?.serverPort ?? null;
 }
 
 /**

@@ -18,7 +18,7 @@ export function fetchCostHistory(): Promise<CostHistoryEntry[]> {
       date: e.date,
       totalUsd: e.costUsd,
       totalTokens: e.tokens,
-      sessionCount: 0,
+      sessionCount: e.sessionCount,
     })),
   )
 }
