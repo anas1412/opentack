@@ -8,6 +8,7 @@ import type {
   RepoUpdateInput,
   Session,
   Settings,
+  SettingsUpdateInput,
   CostSummary,
   OpencodeConfig,
   OpencodeTuiConfig,
@@ -131,7 +132,13 @@ export type OpenTackRPC = {
 
       // ─── Settings ───────────────────────────────────────────
       getSettings: { params: void; response: Settings }
-      updateSettings: { params: Partial<Settings>; response: Settings }
+      updateSettings: { params: Partial<SettingsUpdateInput>; response: Settings }
+
+      // ─── GitHub CLI ──────────────────────────────────────
+      ghTest: { params: void; response: { ok: boolean; user?: { login: string; name: string | null; email: string | null; avatarUrl: string | null; plan: string | null }; error?: string } }
+      ghInstall: { params: void; response: { success: boolean; path?: string; error?: string; message?: string } }
+      ghAuthStart: { params: void; response: { deviceCode: string; userCode: string; verificationUri: string; interval: number } }
+      ghAuthPoll: { params: { deviceCode: string }; response: { status: string; token?: string; error?: string } }
 
       // ─── Opencode Config ────────────────────────────────────
       getOpencodeConfig: { params: void; response: OpencodeConfig }

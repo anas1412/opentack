@@ -15,6 +15,7 @@ import {
 } from "../../paths"
 import path from "path"
 import { z } from "zod"
+import { encryptToken } from "../../shared/gh-runner"
 
 import type {
   Ticket,
@@ -25,6 +26,7 @@ import type {
   RepoUpdateInput,
   Session,
   Settings,
+  SettingsUpdateInput,
   CostSummary,
   OpencodeConfig,
   OpencodeTuiConfig,
@@ -96,7 +98,14 @@ function generateId(): string {
   return randomUUID()
 }
 
-async function getSettingsRow(): Promise<{ forwardDescription: boolean; theme: string | null; model: string } | undefined> {
+async function getSettingsRow(): Promise<{
+  forwardDescription: boolean;
+  theme: string | null;
+  model: string;
+  ghPath: string | null;
+  ghToken: string | null;
+  defaultRemote: string | null;
+} | undefined> {
   const rows = await db.select().from(schema.settings).where(eq(schema.settings.id, "global")).limit(1)
   return rows[0]
 }
@@ -1146,17 +1155,73 @@ export async function getSettings(): Promise<Settings> {
     forwardDescription: row!.forwardDescription === true,
     theme: (row!.theme as Settings["theme"]) || "amber",
     model: row!.model || "opencode/big-pickle",
+    ghPath: row!.ghPath || "gh",
+    ghAuthed: !!row!.ghToken,
+    defaultRemote: row!.defaultRemote || "origin",
   }
 }
 
-export async function updateSettings(params: Partial<Settings>): Promise<Settings> {
+export async function updateSettings(params: Partial<SettingsUpdateInput>): Promise<Settings> {
   const data = settingsUpdateSchema.parse(params)
   const updates: Record<string, unknown> = { updatedAt: Date.now() }
   if (data.forwardDescription !== undefined) updates.forwardDescription = data.forwardDescription ? 1 : 0
   if (data.theme !== undefined) updates.theme = data.theme
   if (data.model !== undefined) updates.model = data.model
+  if (data.ghPath !== undefined) updates.ghPath = data.ghPath
+  if (data.ghToken !== undefined) {
+    updates.ghToken = data.ghToken ? encryptToken(data.ghToken) : null
+  }
+  if (data.defaultRemote !== undefined) updates.defaultRemote = data.defaultRemote
   await db.update(schema.settings).set(updates).where(eq(schema.settings.id, "global"))
   return getSettings()
+}
+
+// ─── GitHub CLI ─────────────────────────────────────────────────────────
+
+export async function ghTest(): Promise<{ ok: boolean; user?: { login: string; name: string | null; email: string | null; avatarUrl: string | null; plan: string | null }; error?: string }> {
+  const { testGhConnection } = await import("../../shared/gh-runner")
+  return testGhConnection()
+}
+
+export async function ghInstall(): Promise<{ success: boolean; path?: string; error?: string; message?: string }> {
+  const { autoInstallGh, findGh } = await import("../../shared/gh-runner")
+
+  const existing = await findGh("gh")
+  if (existing) {
+    return { success: true, path: existing }
+  }
+
+  try {
+    const path = await autoInstallGh()
+    return { success: true, path }
+  } catch (err) {
+    const message = err instanceof Error ? err.message : "Unknown error during installation"
+    return { success: false, error: "INSTALL_FAILED", message }
+  }
+}
+
+export async function ghAuthStart(): Promise<{ deviceCode: string; userCode: string; verificationUri: string; interval: number }> {
+  const { startDeviceAuth } = await import("../../shared/gh-runner")
+  return startDeviceAuth()
+}
+
+export async function ghAuthPoll(params: { deviceCode: string }): Promise<{ status: string; token?: string; error?: string }> {
+  const { pollDeviceAuth, encryptToken } = await import("../../shared/gh-runner")
+  const { eq } = await import("drizzle-orm")
+  const { db, schema } = await import("../../db")
+
+  const result = await pollDeviceAuth(params.deviceCode)
+
+  // If success, store the token
+  if (result.status === "success" && result.token) {
+    const encrypted = encryptToken(result.token)
+    await db
+      .update(schema.settings)
+      .set({ ghToken: encrypted, updatedAt: Date.now() })
+      .where(eq(schema.settings.id, "global"))
+  }
+
+  return result
 }
 
 // ─── Opencode Config ───────────────────────────────────────────────────

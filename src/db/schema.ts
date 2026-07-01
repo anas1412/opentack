@@ -107,6 +107,11 @@ export const settings = sqliteTable("settings", {
   theme: text("theme").notNull().default("amber"),
   model: text("model").notNull().default("opencode/big-pickle"),
   updatedAt: integer("updated_at", { mode: "number" }).notNull(),
+
+  // gh CLI integration
+  ghPath: text("gh_path").notNull().default("gh"),
+  ghToken: text("gh_token"),
+  defaultRemote: text("default_remote").notNull().default("origin"),
 });
 
 // ─── CostRecord — REMOVED. opencode is the sole source of truth for costs. ─────

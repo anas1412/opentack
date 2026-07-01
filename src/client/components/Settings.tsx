@@ -6,6 +6,7 @@ import { fetchOpencodeConfig, updateOpencodeConfig, fetchAgents, fetchOpencodeTu
 import { THEMES, OPENCODE_THEMES, type Theme, type OpencodeTheme } from "../../shared/types";
 import { useAppStore } from "../store/app";
 import { Settings2, Plus, X, Save, Send, Palette, Cpu, Bot, Paintbrush } from "lucide-react";
+import GhSettings from "./GhSettings";
 
 // ─── Env var editor (unchanged from original) ──────────────────────────
 
@@ -197,6 +198,7 @@ export default function Settings() {
     if (settings) {
       setForward(settings.forwardDescription);
       setLocalTheme(settings.theme);
+      setTheme(settings.theme);
       setModel(settings.model || "");
     }
   }, [settings]);
@@ -421,7 +423,10 @@ export default function Settings() {
             </div>
           </SectionCard>
 
-          {/* ── Section 5: Repo env vars ────────────────────────────── */}
+          {/* ── Section 5: GitHub ────────────────────────────── */}
+          <GhSettings />
+
+          {/* ── Section 6: Repo env vars ────────────────────────────── */}
           <div>
             <div className="flex items-center gap-2 mb-3">
               <span className="text-zinc-400"><Settings2 size={14} /></span>

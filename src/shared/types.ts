@@ -162,7 +162,15 @@ export type Theme = (typeof THEMES)[number];
 export interface Settings {
   forwardDescription: boolean;
   theme: Theme;
-  model: string; // e.g. "opencode/big-pickle"
+  model: string;
+  ghPath: string;
+  ghAuthed: boolean;
+  defaultRemote: string;
+}
+
+/** Write-only fields for settings updates (ghToken never returned by server) */
+export interface SettingsUpdateInput extends Partial<Settings> {
+  ghToken?: string;
 }
 
 // ─── Journal ───────────────────────────────────────────

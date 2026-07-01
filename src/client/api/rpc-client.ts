@@ -104,6 +104,10 @@ const REST_MAP: Record<string, RestRoute> = {
   pickDirectory: { method: "GET", path: "/api/system/pick-directory" },
   checkUpdates: { method: "GET", path: "/api/version/check-updates" },
   downloadUpdate: { method: "POST", path: "/api/version/download-update" },
+  ghTest: { method: "POST", path: "/api/gh/test" },
+  ghInstall: { method: "POST", path: "/api/gh/install" },
+  ghAuthStart: { method: "POST", path: "/api/gh/auth/start" },
+  ghAuthPoll: { method: "POST", path: (p) => `/api/gh/auth/poll` },
 }
 
 async function fallbackFetch(method: string, params: any): Promise<any> {

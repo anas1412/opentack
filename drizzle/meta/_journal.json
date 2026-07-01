@@ -71,6 +71,13 @@
       "when": 1782812040874,
       "tag": "0009_natural_black_bird",
       "breakpoints": true
+    },
+    {
+      "idx": 10,
+      "version": "6",
+      "when": 1782824346666,
+      "tag": "0010_medical_zodiak",
+      "breakpoints": true
     }
   ]
 }

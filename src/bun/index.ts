@@ -84,6 +84,12 @@ const rpc = BrowserView.defineRPC<OpenTackRPC>({
       // System
       health: () => handlers.health(),
       pickDirectory: () => handlers.pickDirectory(),
+
+      // GitHub CLI
+      ghTest: () => handlers.ghTest(),
+      ghInstall: () => handlers.ghInstall(),
+      ghAuthStart: () => handlers.ghAuthStart(),
+      ghAuthPoll: (params) => handlers.ghAuthPoll(params),
     },
     messages: {
       "*": (name, _payload) => {

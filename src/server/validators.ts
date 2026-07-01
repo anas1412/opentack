@@ -41,6 +41,9 @@ export const settingsUpdateSchema = z.object({
   forwardDescription: z.boolean().optional(),
   theme: z.enum(["amber", "emerald", "violet", "sky"]).optional(),
   model: z.string().min(1).optional(),
+  ghPath: z.string().optional(),
+  ghToken: z.string().optional(),
+  defaultRemote: z.string().optional(),
 });
 
 export const opencodeConfigUpdateSchema = z.object({
