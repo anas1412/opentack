@@ -33,6 +33,49 @@ Pinboard runs entirely on your machine. Nothing leaves your computer.
 
 Switch between **Overview** (dashboard with stats, cost charts, activity timeline), **List** (filterable table), **Board** (drag-and-drop Kanban), and **Journal** (daily activity grouped by day). Each ticket tracks its session history, token usage, and cost automatically.
 
+## Version control
+
+Pinboard is deeply integrated with Git. Every ticket gets its own branch, a dedicated worktree, and automated tooling from creation to merge.
+
+### Branch naming
+
+Branches are generated automatically based on the ticket's category:
+
+| Category    | Prefix    | Example                              |
+|-------------|-----------|--------------------------------------|
+| Feature     | `feat/`   | `feat/add-login-page`                |
+| Bug         | `fix/`    | `fix/null-pointer`                   |
+| Refactor    | `refactor/` | `refactor/api-layer`               |
+| Chore       | `chore/`  | `chore/update-deps`                  |
+| Docs        | `docs/`   | `docs/api-readme`                    |
+
+No manual `git checkout -b` needed.
+
+### Git worktrees
+
+Every ticket runs in its own isolated worktree under `~/pinboard-worktrees/`:
+
+- **Auto-created** when you start a session
+- **Auto-cleaned** when the ticket is resolved or closed
+- **Persist across restarts** — sessions pick up where they left off
+- **Parallel-safe** — work on multiple tickets in the same repo at the same time
+
+### Submit for review
+
+Click **Submit for review** and Pinboard handles the whole pipeline: generates a commit message from your diff via opencode AI, commits and pushes your changes, creates a PR with the GitHub CLI, and moves the ticket to **Needs Review**.
+
+### Resolve & merge
+
+Drag a ticket to **Resolved** and Pinboard squashes all branch commits, merges them onto the base branch, and cleans up the worktree. No manual rebasing or merge conflicts to handle.
+
+### GitHub CLI integration
+
+Pinboard pairs with the [GitHub CLI](https://cli.github.com/) for auth and PR creation — auto-detects `gh`, supports OAuth device flow and personal access tokens (with encrypted storage), and can even auto-install it if missing. Configure everything in **Settings → Version Control**.
+
+### Repository cloning
+
+Add a repo from GitHub by pasting any Git URL — SSH, HTTPS, or HTTPS with a token. Pinboard clones it to `~/.pinboard/repos/` and detects the default branch automatically.
+
 ## Quick start
 
 ### Prerequisites

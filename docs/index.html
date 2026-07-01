@@ -466,6 +466,7 @@ footer{ border-top:1px solid var(--line); padding-block:34px; }
 .foot-brand{ display:flex; align-items:center; gap:8px; font-family:var(--font-display); font-weight:700; color:var(--smoke); }
 .foot-note{ font-size:.82rem; color:var(--smoke-dim); max-width:480px; text-align:right; }
 @media (max-width:640px){ .foot-note{ text-align:left; } }
+
 </style>
 </head>
 <body>
@@ -521,9 +522,12 @@ footer{ border-top:1px solid var(--line); padding-block:34px; }
       <h1>Pin it. Track it. <span>Ship it.</span></h1>
       <p class="lede">Pinboard turns scattered opencode terminal sessions into a real ticket board — repos, branches, costs, and full conversation history, all in one local dashboard.</p>
       <div class="hero-ctas">
-        <a class="btn btn-primary" href="#quickstart">Get the install command</a>
-        <a class="btn btn-ghost" href="https://github.com/anas1412/opencode-pinboard" target="_blank" rel="noopener">
-          <svg class="icon" style="width:16px;height:16px"><use href="#i-github"/></svg> View source
+        <a class="btn btn-primary" href="#quickstart">One-line install</a>
+        <a class="btn btn-ghost" href="https://github.com/anas1412/opencode-pinboard/releases/latest/download/pinboard-install-linux" target="_blank" rel="noopener">
+          <svg class="icon" style="width:15px;height:15px"><use href="#i-terminal"/></svg> Linux binary
+        </a>
+        <a class="btn btn-ghost" href="https://github.com/anas1412/opencode-pinboard/releases/latest/download/pinboard-install-windows.exe" target="_blank" rel="noopener">
+          <svg class="icon" style="width:15px;height:15px"><use href="#i-terminal"/></svg> Windows binary
         </a>
       </div>
       <div class="trust-row">
@@ -696,6 +700,30 @@ footer{ border-top:1px solid var(--line); padding-block:34px; }
       </div>
 
     </div>
+
+    <div class="head head--center" data-reveal style="margin-top:56px">
+      <span class="eyebrow">git, automated</span>
+      <h2>Branches, worktrees, PRs — zero manual git work.</h2>
+    </div>
+
+    <div class="term-card" data-reveal style="max-width:640px">
+      <div class="term-bar">
+        <span></span><span></span><span></span>
+        <small>pinboard git log</small>
+      </div>
+      <div class="term-body">
+        <div class="l">branch created — <span style="color:var(--ember)">feat/add-login-page</span> (from Feature ticket)</div>
+        <div class="l">worktree ready — <span style="color:var(--ember)">~/pinboard-worktrees/my-repo/</span></div>
+        <div class="l">session active — changes tracked against base branch</div>
+        <div class="l">submitted for review — PR opened, status: <b style="color:var(--moss);font-weight:600">Needs Review</b></div>
+        <div class="l">resolved — merged into base, worktree cleaned up<span class="cursor"></span></div>
+      </div>
+    </div>
+
+    <p style="text-align:center;font-size:.85rem;color:var(--smoke-dim);margin-top:14px">
+      <svg class="icon" style="width:14px;height:14px;vertical-align:-3px;color:var(--flare)"><use href="#i-github"/></svg>
+      &nbsp;GitHub CLI integrated — configure in Settings
+    </p>
   </div>
 </section>
 
