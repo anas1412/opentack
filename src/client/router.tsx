@@ -242,19 +242,19 @@ const journalRoute = createRoute({
 });
 
 const settingsRoute = createRoute({
-  getParentRoute: () => rootRoute,
+  getParentRoute: () => contentLayout,
   path: "/settings",
   component: Settings,
 });
 
 const settingsGithubRoute = createRoute({
-  getParentRoute: () => rootRoute,
+  getParentRoute: () => contentLayout,
   path: "/settings/github",
   component: GhSettingsPage,
 });
 
 const usageRoute = createRoute({
-  getParentRoute: () => rootRoute,
+  getParentRoute: () => contentLayout,
   path: "/usage",
   validateSearch: contentSearchSchema,
   component: UsagePage,
@@ -275,7 +275,7 @@ const chatRoute = createRoute({
 
 // Redirect /index.html → / (Electrobun loads the SPA at index.html path)
 const indexHtmlFallback = createRoute({
-  getParentRoute: () => rootRoute,
+  getParentRoute: () => contentLayout,
   path: "/index.html",
   beforeLoad: () => {
     throw redirect({ to: "/" })
@@ -284,12 +284,10 @@ const indexHtmlFallback = createRoute({
 
 // ─── Route Tree & Router ────────────────────────────────────────────
 
+// Every route lives under contentLayout so the header (tabs + actions)
+// is present on every page — including future routes added here.
 const routeTree = rootRoute.addChildren([
-  contentLayout.addChildren([indexRoute, ticketsRoute, journalRoute, ticketRoute, chatRoute]),
-  settingsRoute,
-  settingsGithubRoute,
-  usageRoute,
-  indexHtmlFallback,
+  contentLayout.addChildren([indexRoute, ticketsRoute, journalRoute, settingsRoute, settingsGithubRoute, usageRoute, ticketRoute, chatRoute, indexHtmlFallback]),
 ]);
 
 const router = createRouter({ routeTree });

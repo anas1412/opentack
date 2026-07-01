@@ -68,8 +68,10 @@ function TicketCard({
       draggable
       onDragStart={handleDragStart}
       onClick={() => onSelect(ticket.id)}
-      className={`w-full text-left bg-zinc-800 hover:bg-zinc-750 border border-zinc-700 hover:border-zinc-600 rounded-lg p-3 transition-colors cursor-grab active:cursor-grabbing space-y-2 border-l-[3px] ${PRIORITY_BORDERS[ticket.priority] || "border-l-zinc-700"}`}
+      className={`relative w-full text-left bg-zinc-800 hover:bg-zinc-750 border border-zinc-700 hover:border-zinc-600 rounded-lg p-3 mt-[8px] transition-colors cursor-grab active:cursor-grabbing space-y-2 border-l-[3px] overflow-visible ${PRIORITY_BORDERS[ticket.priority] || "border-l-zinc-700"}`}
     >
+      {/* Pin — signature motif (half outside card, in margin space) */}
+      <span className="pin-sm left-[22px] top-[-5px]" />
       <div className="flex items-start justify-between gap-2">
         <p className="text-sm font-medium text-zinc-200 leading-snug line-clamp-2">
           {ticket.title}
