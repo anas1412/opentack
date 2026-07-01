@@ -1348,16 +1348,16 @@ async function handleTokenSuccess(
     throw new Error(`Failed to inject token: ${stderr}`)
   }
 
-  // Clean up session
-  oauthSessions.delete(processId)
-
-  // Verify connection and get user info
+  // Verify connection and get user info (do this BEFORE deleting session so retries work)
   const { testGhConnection } = await import("../../shared/gh-runner")
   const result = await testGhConnection()
 
   if (!result.ok || !result.user) {
-    throw new Error("Token injected but verification failed")
+    throw new Error(`Token injected but verification failed: ${result.error || "gh auth status returned not authenticated"}`)
   }
+
+  // All good — clean up session
+  oauthSessions.delete(processId)
 
   console.log("[ghAuthLogin] OAuth success:", result.user.login)
   return { status: "success", user: result.user }

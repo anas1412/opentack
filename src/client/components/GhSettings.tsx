@@ -283,8 +283,16 @@ export default function GhSettings() {
           setGhAuth("authed", pollRes.user as GhUser);
           return;
         }
+        if (pollRes.status === "pending") {
+          setOauthError("Still waiting for GitHub response. Make sure you entered the code on github.com/login/device.");
+        } else if (pollRes.status === "expired") {
+          setOauthError("Session expired. Click Cancel and try again.");
+        } else {
+          setOauthError(pollRes.error || "Not yet authorized. Make sure you entered the code on GitHub.");
+        }
+      } else {
+        setOauthError("Session not found. Click Cancel and try again.");
       }
-      setOauthError("Not yet authorized. Make sure you entered the code on GitHub.");
       setOauthConfirming(false);
     } catch (err) {
       setOauthError(err instanceof Error ? err.message : "Check failed");
