@@ -108,6 +108,7 @@ const REST_MAP: Record<string, RestRoute> = {
   ghInstall: { method: "POST", path: "/api/gh/install" },
   ghAuthStart: { method: "POST", path: "/api/gh/auth/start" },
   ghAuthPoll: { method: "POST", path: (p) => `/api/gh/auth/poll` },
+  submitForReview: { method: "POST", path: (p) => `/api/tickets/${p.ticketId}/submit-for-review` },
 }
 
 async function fallbackFetch(method: string, params: any): Promise<any> {

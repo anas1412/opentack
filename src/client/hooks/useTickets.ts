@@ -1,7 +1,7 @@
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import {
   fetchTickets, fetchTicket, createTicket, updateTicket, deleteTicket,
-  fetchTicketSessions, batchUpdateTickets, batchDeleteTickets, generateNotes,
+  fetchTicketSessions, batchUpdateTickets, batchDeleteTickets, generateNotes, submitForReview,
 } from "../api/tickets";
 import type { TicketCreateInput, TicketUpdateInput } from "../../shared/types";
 
@@ -90,6 +90,17 @@ export function useBatchDeleteTickets() {
     mutationFn: (ids: string[]) => batchDeleteTickets(ids),
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ["tickets"] });
+    },
+  });
+}
+
+export function useSubmitForReview() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (ticketId: string) => submitForReview(ticketId),
+    onSuccess: (data, ticketId) => {
+      qc.invalidateQueries({ queryKey: ["tickets"] });
+      qc.invalidateQueries({ queryKey: ["ticket", ticketId] });
     },
   });
 }

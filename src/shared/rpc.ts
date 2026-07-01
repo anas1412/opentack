@@ -140,6 +140,9 @@ export type OpenTackRPC = {
       ghAuthStart: { params: void; response: { deviceCode: string; userCode: string; verificationUri: string; interval: number } }
       ghAuthPoll: { params: { deviceCode: string }; response: { status: string; token?: string; error?: string } }
 
+      // ─── Submit for Review / PR ──────────────────────────
+      submitForReview: { params: { ticketId: string }; response: { prUrl: string | null; commitHash: string | null } }
+
       // ─── Opencode Config ────────────────────────────────────
       getOpencodeConfig: { params: void; response: OpencodeConfig }
       updateOpencodeConfig: { params: Partial<OpencodeConfig>; response: OpencodeConfig }

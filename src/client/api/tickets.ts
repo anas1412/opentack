@@ -79,3 +79,7 @@ export function createTicketSession(ticketId: string): Promise<{
 export function improveSessionPrompt(sessionId: string): Promise<void> {
   return request("improveSession", { id: sessionId })
 }
+
+export function submitForReview(ticketId: string): Promise<{ prUrl: string | null; commitHash: string | null }> {
+  return request("submitForReview", { ticketId })
+}

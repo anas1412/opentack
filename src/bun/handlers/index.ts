@@ -431,48 +431,14 @@ export async function updateTicket(params: { id: string } & TicketUpdateInput): 
     }
   }
 
-  // Submit for Review: squash branch, generate commit message via opencode run, push
+  // SUBMIT FOR REVIEW is now handled by the dedicated submitForReview handler.
+  // The client calls submitForReview RPC instead of going through updateTicket for needs_review.
+  // This path is intentionally empty — the dedicated handler does commit + push + PR creation.
+  // The if-block below is left as a no-op guard so the status update still goes through
+  // if someone manually edits the ticket (e.g. the edit form) and selects needs_review.
   if (existing[0].status === "in_progress" && data.status === "needs_review") {
-    try {
-      const [repo] = await db.select().from(schema.repos).where(eq(schema.repos.id, existing[0].repoId)).limit(1)
-      if (repo && existing[0].branch) {
-        const base = existing[0].baseBranch || "main"
-        const repoPath = repo.localPath
-
-        // Get diff of all branch changes for commit message generation
-        const diffProc = Bun.spawnSync(["git", "diff", `origin/${base}...`, "--diff-filter=ACDMR"], { cwd: repoPath })
-        const diff = diffProc.stdout.toString().trim()
-
-        if (diff) {
-          // Generate commit message from diff
-          writeFileSync("/tmp/opencode/commit-diff.txt", diff)
-          const settings = await getSettings()
-          const opencodeCfg = await getOpencodeConfig()
-          const modelFlag = settings.model ? ["--model", settings.model] : []
-          const cfgAgent = opencodeCfg.default_agent || ""
-          const agentFlag = cfgAgent && cfgAgent !== "auto" && cfgAgent !== "ask" ? ["--agent", cfgAgent] : []
-          const genProc = Bun.spawn(["opencode", "run", ...modelFlag, ...agentFlag,
-            "Read /tmp/opencode/commit-diff.txt. Write a concise git commit message. First line: summary. Blank line. Bullet list of key changes. Output ONLY the commit message, no preamble."
-          ], { stdio: ["ignore", "pipe", "pipe"], env: { ...process.env } })
-          const [genStdout] = await Promise.all([new Response(genProc.stdout).text()])
-          await genProc.exited
-          const commitMsg = genStdout.trim() || "Changes for review"
-
-          // Squash: soft reset to base, commit with generated message, force push
-          const reset = Bun.spawnSync(["git", "reset", "--soft", `origin/${base}`], { cwd: repoPath })
-          if (reset.exitCode === 0) {
-            Bun.spawnSync(["git", "commit", "-m", commitMsg], { cwd: repoPath })
-            Bun.spawnSync(["git", "push", "-f", "origin", existing[0].branch], { cwd: repoPath })
-          } else {
-            // Fallback: no remote tracking ref — just push
-            Bun.spawnSync(["git", "push", "origin", existing[0].branch], { cwd: repoPath })
-          }
-        } else {
-          // No diff — just push
-          Bun.spawnSync(["git", "push", "origin", existing[0].branch], { cwd: repoPath })
-        }
-      }
-    } catch {}
+    // Session stop is the caller's responsibility in manual edit mode.
+    // No commit/push/PR — the dedicated submitForReview handler does that.
   }
 
   // Merge & Resolve: squash branch, generate commit message, merge into base
@@ -1222,6 +1188,13 @@ export async function ghAuthPoll(params: { deviceCode: string }): Promise<{ stat
   }
 
   return result
+}
+
+// ─── Submit for Review / PR ──────────────────────────────────────────────
+
+export async function submitForReview(params: { ticketId: string }): Promise<{ prUrl: string | null; commitHash: string | null }> {
+  const { submitForReview: doSubmit } = await import("../../shared/submit-for-review")
+  return doSubmit(params.ticketId)
 }
 
 // ─── Opencode Config ───────────────────────────────────────────────────

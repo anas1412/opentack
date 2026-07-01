@@ -9,6 +9,7 @@ import { enrichSessions } from "../../shared/opencode-db";
 import { startSessionServer, stopSessionServer, getAnyActivePort } from "../opencode-manager";
 import { removeWorktreeForTicket } from "./worktree";
 import { emitSse } from "../sse";
+import { submitForReview } from "../../shared/submit-for-review";
 import { z } from "zod";
 
 export function registerTicketRoutes(app: FastifyInstance) {
@@ -379,6 +380,31 @@ ${transcriptText}
     }
     } finally {
       stopSessionServer(notesSessionId);
+    }
+  });
+
+  // Submit for review — commit + push + create PR
+  app.post("/api/tickets/:id/submit-for-review", async (req, reply) => {
+    const { id } = req.params as { id: string };
+
+    const [ticket] = await db.select().from(schema.tickets).where(eq(schema.tickets.id, id));
+    if (!ticket)
+      return reply.status(404).send({ error: "NOT_FOUND", message: "Ticket not found" });
+
+    if (ticket.status !== "in_progress")
+      return reply.status(400).send({
+        error: "INVALID_STATUS",
+        message: `Cannot submit ticket with status "${ticket.status}". Must be "in_progress".`,
+      });
+
+    try {
+      const result = await submitForReview(id);
+      return result;
+    } catch (err) {
+      return reply.status(500).send({
+        error: "SUBMIT_FAILED",
+        message: err instanceof Error ? err.message : "Failed to submit for review",
+      });
     }
   });
 

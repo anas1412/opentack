@@ -1,12 +1,12 @@
 import { useState, useMemo } from "react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
-import { useTicket, useUpdateTicket, useDeleteTicket, useTicketSessions, useGenerateNotes } from "../hooks/useTickets";
+import { useTicket, useUpdateTicket, useDeleteTicket, useTicketSessions, useGenerateNotes, useSubmitForReview } from "../hooks/useTickets";
 import { useRepos } from "../hooks/useRepos";
 import { useNavigate } from "@tanstack/react-router";
 import type { TicketStatus, TicketPriority, TicketCategory } from "../../shared/types";
 import { TICKET_STATUSES, TICKET_PRIORITIES, TICKET_CATEGORIES } from "../../shared/types";
-import { Clock, GitBranch, DollarSign, FileCode, Pencil, X, Trash2, Check, RotateCcw, CheckCircle, Ban, ArrowLeft, GitPullRequest, GitMerge } from "lucide-react";
+import { Clock, GitBranch, DollarSign, FileCode, Pencil, X, Trash2, Check, RotateCcw, CheckCircle, Ban, ArrowLeft, GitPullRequest, GitMerge, ExternalLink } from "lucide-react";
 
 const STATUS_COLORS: Record<string, string> = {
   open: "bg-blue-500/20 text-blue-400 border-blue-500/30",
@@ -53,20 +53,32 @@ const STATUS_ACTIONS: Record<string, StatusAction[]> = {
 
 function StatusActions({ status, ticketId, onStopSession }: { status: TicketStatus; ticketId: string; onStopSession?: () => Promise<void> }) {
   const updateTicket = useUpdateTicket();
+  const submitForReviewMutation = useSubmitForReview();
   const [pendingAction, setPendingAction] = useState<TicketStatus | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [prUrl, setPrUrl] = useState<string | null>(null);
   const actions = STATUS_ACTIONS[status];
   if (!actions || actions.length === 0) return null;
 
   async function handleClick(nextStatus: TicketStatus) {
     setError(null);
+    setPrUrl(null);
     setPendingAction(nextStatus);
     try {
-      // Stop the opencode session when work on this ticket is done
-      if ((nextStatus === "needs_review" || nextStatus === "resolved" || nextStatus === "closed") && onStopSession) {
-        await onStopSession();
+      if (nextStatus === "needs_review") {
+        // Dedicated submit-for-review handler handles everything:
+        // stop session, commit, push, PR creation
+        const result = await submitForReviewMutation.mutateAsync(ticketId);
+        if (result.prUrl) {
+          setPrUrl(result.prUrl);
+        }
+      } else {
+        // Stop session for terminal statuses
+        if ((nextStatus === "resolved" || nextStatus === "closed") && onStopSession) {
+          await onStopSession();
+        }
+        await updateTicket.mutateAsync({ id: ticketId, input: { status: nextStatus } });
       }
-      await updateTicket.mutateAsync({ id: ticketId, input: { status: nextStatus } });
     } catch (err) {
       setError(err instanceof Error ? err.message : "Failed to update ticket");
     } finally {
@@ -93,6 +105,17 @@ function StatusActions({ status, ticketId, onStopSession }: { status: TicketStat
           );
         })}
       </div>
+      {prUrl && (
+        <a
+          href={prUrl}
+          target="_blank"
+          rel="noopener noreferrer"
+          className="flex items-center gap-1 text-xs text-purple-400 hover:text-purple-300 underline"
+        >
+          <ExternalLink size={12} />
+          PR created: {prUrl.split("/").pop()}
+        </a>
+      )}
       {error && <p className="text-xs text-red-400">{error}</p>}
     </div>
   );
