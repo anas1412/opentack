@@ -1023,13 +1023,14 @@ export async function costHistory(): Promise<Array<{ date: string; costUsd: numb
 export async function costPerTicket(params: { startDate?: string; endDate?: string; search?: string; repoId?: string }) {
   const sessions = await db
     .select({
-      session: schema.sessions,
+      ticketId: schema.sessions.ticketId,
+      opencodeSessionId: schema.sessions.opencodeSessionId,
       ticketTitle: schema.tickets.title,
       repoName: schema.repos.name,
     })
     .from(schema.sessions)
-    .leftJoin(schema.tickets, eq(schema.sessions.ticketId, schema.tickets.id))
-    .leftJoin(schema.repos, eq(schema.tickets.repoId, schema.repos.id))
+    .innerJoin(schema.tickets, eq(schema.sessions.ticketId, schema.tickets.id))
+    .innerJoin(schema.repos, eq(schema.tickets.repoId, schema.repos.id))
     .where(and(
       ...(params.startDate ? [gte(schema.sessions.createdAt, new Date(params.startDate).getTime())] : []),
       ...(params.endDate ? [lte(schema.sessions.createdAt, new Date(params.endDate).getTime())] : []),
@@ -1038,20 +1039,18 @@ export async function costPerTicket(params: { startDate?: string; endDate?: stri
     ))
 
   // Enrich with opencode DB costs and model (single source of truth)
-  const enrichedSessions = enrichSessions(sessions.map((s) => s.session))
+  const enriched = enrichSessions(sessions)
 
   const perTicket = new Map<string, { title: string; repoName: string; sessionCount: number; models: Map<string, { costUsd: number; tokens: number; sessionCount: number }> }>()
 
   for (let i = 0; i < sessions.length; i++) {
-    const { session, ticketTitle, repoName } = sessions[i]
-    const cost = enrichedSessions[i]
-    if (!session.ticketId) continue
-    if (!cost.model) continue // skip sessions without a model in opencode DB
-    const key = session.ticketId
-    if (!perTicket.has(key)) {
-      perTicket.set(key, { title: ticketTitle || "Unknown", repoName: repoName || "Unknown", sessionCount: 0, models: new Map() })
+    const { ticketId, ticketTitle, repoName } = sessions[i]
+    const cost = enriched[i]
+    if (!ticketId || !cost.model) continue
+    if (!perTicket.has(ticketId)) {
+      perTicket.set(ticketId, { title: ticketTitle || "Unknown", repoName: repoName || "Unknown", sessionCount: 0, models: new Map() })
     }
-    const entry = perTicket.get(key)!
+    const entry = perTicket.get(ticketId)!
     entry.sessionCount++
     if (!entry.models.has(cost.model)) {
       entry.models.set(cost.model, { costUsd: 0, tokens: 0, sessionCount: 0 })
@@ -1077,35 +1076,20 @@ export async function costPerModel(params: { startDate?: string; endDate?: strin
   const startMs = params.startDate ? new Date(params.startDate).getTime() : 0
   const endMs = params.endDate ? new Date(params.endDate).getTime() : Infinity
 
-  // Query the opencode DB directly (same source as costSummary) — no fallback, no enrichment
+  // Single source of truth: opencode DB. No OpenTack tables touched.
   const allSessions = queryOpencodeSessionsSince(startMs)
 
-  // Also get ticket mapping from OpenTack sessions for ticketCount
-  const ticketMap = new Map<string, string>() // opencodeSessionId → ticketId
-  const otSessions = await db
-    .select({ ticketId: schema.sessions.ticketId, opencodeSessionId: schema.sessions.opencodeSessionId })
-    .from(schema.sessions)
-    .where(and(
-      gte(schema.sessions.createdAt, startMs),
-      ...(endMs < Infinity ? [lte(schema.sessions.createdAt, endMs)] : []),
-    ))
-  for (const s of otSessions) {
-    if (s.ticketId && s.opencodeSessionId) ticketMap.set(s.opencodeSessionId, s.ticketId)
-  }
-
-  const perModel = new Map<string, { costUsd: number; tokens: number; sessionCount: number; tickets: Set<string> }>()
+  const perModel = new Map<string, { costUsd: number; tokens: number; sessionCount: number }>()
 
   for (const s of allSessions) {
     if (s.timeCreated > endMs) continue
     const model = s.model ? normalizeModel(s.model) : null
     if (!model) continue
     if (!perModel.has(model)) {
-      perModel.set(model, { costUsd: 0, tokens: 0, sessionCount: 0, tickets: new Set() })
+      perModel.set(model, { costUsd: 0, tokens: 0, sessionCount: 0 })
     }
     const entry = perModel.get(model)!
     entry.sessionCount++
-    const ticketId = ticketMap.get(s.id)
-    if (ticketId) entry.tickets.add(ticketId)
     entry.costUsd += s.cost
     entry.tokens += s.tokensInput + s.tokensOutput + s.tokensReasoning
   }
@@ -1115,7 +1099,7 @@ export async function costPerModel(params: { startDate?: string; endDate?: strin
     costUsd: data.costUsd,
     tokens: data.tokens,
     sessionCount: data.sessionCount,
-    ticketCount: data.tickets.size,
+    ticketCount: 0,
   }))
 }
 
@@ -1176,28 +1160,83 @@ export async function ghInstall(): Promise<{ success: boolean; path?: string; er
   }
 }
 
-export async function ghAuthStart(): Promise<{ deviceCode: string; userCode: string; verificationUri: string; interval: number }> {
-  const { startDeviceAuth } = await import("../../shared/gh-runner")
-  return startDeviceAuth()
-}
+// ─── GitHub Auth via gh CLI subprocess ────────────────────────────────
+//
+// The custom OAuth device-flow polling (hitting GitHub's API directly from
+// Bun fetch) doesn't reliably detect authorization. Instead, we delegate
+// the entire OAuth flow to `gh auth login --web` — gh's own
+// battle-tested implementation.  We spawn it, read the one-time code + URL
+// from stdout, send Enter to start polling, then monitor the process exit.
 
-export async function ghAuthPoll(params: { deviceCode: string }): Promise<{ status: string; token?: string; error?: string }> {
-  const { pollDeviceAuth, encryptToken } = await import("../../shared/gh-runner")
-  const { eq } = await import("drizzle-orm")
-  const { db, schema } = await import("../../db")
+const loginProcesses = new Map<string, { proc: import("bun").Subprocess; userCode: string; verificationUri: string }>()
 
-  const result = await pollDeviceAuth(params.deviceCode)
+export async function ghAuthLogin(): Promise<{ processId: string; userCode: string; verificationUri: string }> {
+  const { findGh } = await import("../../shared/gh-runner")
+  const ghPath = await findGh("gh")
+  if (!ghPath) throw new Error("gh CLI not found")
 
-  // If success, store the token
-  if (result.status === "success" && result.token) {
-    const encrypted = encryptToken(result.token)
-    await db
-      .update(schema.settings)
-      .set({ ghToken: encrypted, updatedAt: Date.now() })
-      .where(eq(schema.settings.id, "global"))
+  const proc = Bun.spawn([ghPath, "auth", "login", "--web"], {
+    stdin: "pipe",
+    stdout: "pipe",
+    stderr: "pipe",
+  })
+
+  // Read stdout line by line until we get the code and URL
+  const reader = proc.stdout.getReader()
+  const decoder = new TextDecoder()
+  let buf = ""
+  let userCode = ""
+  let verificationUri = ""
+
+  while (true) {
+    const { done, value } = await reader.read()
+    if (done) break
+    buf += decoder.decode(value, { stream: true })
+
+    const codeMatch = buf.match(/one-time code:\s*(\S+)/)
+    const urlMatch = buf.match(/(https?:\/\/\S+)/)
+    if (codeMatch) userCode = codeMatch[1]
+    if (urlMatch && !verificationUri) verificationUri = urlMatch[1]
+
+    if (userCode && verificationUri) {
+      // Send Enter to kick off gh's own polling
+      proc.stdin.write("\n")
+      proc.stdin.flush()
+
+      const processId = crypto.randomUUID()
+      loginProcesses.set(processId, { proc, userCode, verificationUri })
+
+      // Don't await process exit — gh polls in background
+      proc.ref()
+
+      console.log("[ghAuthLogin] started, code:", userCode, "uri:", verificationUri)
+      return { processId, userCode, verificationUri }
+    }
   }
 
-  return result
+  // If we get here, gh exited before printing the code
+  const stderr = await new Response(proc.stderr).text()
+  throw new Error(stderr || "gh auth login exited without printing a code")
+}
+
+export async function ghAuthLoginPoll(params: { processId: string }): Promise<{ status: "pending" | "success" | "error"; error?: string }> {
+  const entry = loginProcesses.get(params.processId)
+  if (!entry) return { status: "error", error: "Login session expired or not found" }
+
+  const exited = entry.proc.exitCode !== null
+  if (!exited) return { status: "pending" }
+
+  // Process finished — clean up
+  loginProcesses.delete(params.processId)
+
+  if (entry.proc.exitCode === 0) {
+    console.log("[ghAuthLogin] success")
+    return { status: "success" }
+  }
+
+  const stderr = await new Response(entry.proc.stderr).text()
+  console.log("[ghAuthLogin] failed:", stderr)
+  return { status: "error", error: stderr || `gh auth login exited with code ${entry.proc.exitCode}` }
 }
 
 // ─── Sync Worktree ────────────────────────────────────────────────────────
@@ -1455,6 +1494,18 @@ export async function pickDirectory(): Promise<string | null> {
       resolve(answer || null)
     })
   })
+}
+
+export async function openUrl({ url }: { url: string }): Promise<void> {
+  const { execSync } = await import("child_process")
+  const platform = process.platform
+  try {
+    if (platform === "darwin") execSync(`open "${url}"`, { timeout: 5000 })
+    else if (platform === "win32") execSync(`start "" "${url}"`, { timeout: 5000 })
+    else execSync(`xdg-open "${url}"`, { timeout: 5000 })
+  } catch {
+    // silently fail — the user can open the URL manually
+  }
 }
 
 // ─── Version / Updates ──────────────────────────────────────────────────

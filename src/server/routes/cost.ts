@@ -1,5 +1,5 @@
 import type { FastifyInstance } from "fastify";
-import { gte, and, eq, isNotNull } from "drizzle-orm";
+import { gte, lte, and, eq, like, isNotNull } from "drizzle-orm";
 import { db, schema } from "../../db";
 import { dailyCostHistory, aggregateOpencodeSessionsSince, enrichSessions, queryOpencodeSessionsSince, normalizeModel } from "../../shared/opencode-db";
 import { getOpenTackWorktreesDir } from "../../paths";
@@ -61,20 +61,17 @@ export function registerCostRoutes(app: FastifyInstance) {
   });
 
   // Per-ticket cost breakdown
-  app.get<{ Querystring: { days?: string; repoId?: string } }>("/api/costs/per-ticket", async (req) => {
-    const days = parseInt(req.query.days || "7", 10);
-    const since = Date.now() - days * 24 * 60 * 60 * 1000;
-
-    const conds: any[] = [gte(schema.sessions.createdAt, since)];
-    if (req.query.repoId) {
-      conds.push(eq(schema.tickets.repoId, req.query.repoId));
-    }
+  app.get<{ Querystring: { startDate?: string; endDate?: string; search?: string; repoId?: string } }>("/api/costs/per-ticket", async (req) => {
+    const conds: any[] = [];
+    if (req.query.startDate) conds.push(gte(schema.sessions.createdAt, new Date(req.query.startDate).getTime()));
+    if (req.query.endDate) conds.push(lte(schema.sessions.createdAt, new Date(req.query.endDate).getTime()));
+    if (req.query.search) conds.push(like(schema.tickets.title, `%${req.query.search}%`));
+    if (req.query.repoId) conds.push(eq(schema.tickets.repoId, req.query.repoId));
 
     const rows = await db
       .select({
         ticketId: schema.sessions.ticketId,
         ticketTitle: schema.tickets.title,
-        repoId: schema.tickets.repoId,
         repoName: schema.repos.name,
         opencodeSessionId: schema.sessions.opencodeSessionId,
       })
@@ -89,98 +86,86 @@ export function registerCostRoutes(app: FastifyInstance) {
     const ticketMap = new Map<string, {
       ticketId: string;
       ticketTitle: string;
-      repoId: string;
       repoName: string;
       sessionCount: number;
       totalTokens: number;
-      totalCost: number;
-      models: Map<string, { model: string; tokens: number; cost: number; sessionCount: number }>;
+      totalCostUsd: number;
+      models: Map<string, { model: string; tokens: number; costUsd: number; sessionCount: number }>;
     }>();
 
     for (const row of enriched) {
-      if (!row.ticketId) continue;
-      if (!row.model) continue; // skip sessions without a model in opencode DB
+      if (!row.ticketId || !row.model) continue;
       let entry = ticketMap.get(row.ticketId);
       if (!entry) {
         entry = {
           ticketId: row.ticketId,
           ticketTitle: row.ticketTitle,
-          repoId: row.repoId,
           repoName: row.repoName,
           sessionCount: 0,
           totalTokens: 0,
-          totalCost: 0,
+          totalCostUsd: 0,
           models: new Map(),
         };
         ticketMap.set(row.ticketId, entry);
       }
       entry.sessionCount++;
-      entry.totalCost += row.costUsd;
+      entry.totalCostUsd += row.costUsd;
       entry.totalTokens += row.totalTokens;
 
       let m = entry.models.get(row.model);
       if (!m) {
-        m = { model: row.model, tokens: 0, cost: 0, sessionCount: 0 };
+        m = { model: row.model, tokens: 0, costUsd: 0, sessionCount: 0 };
         entry.models.set(row.model, m);
       }
       m.tokens += row.totalTokens;
-      m.cost += row.costUsd;
+      m.costUsd += row.costUsd;
       m.sessionCount++;
     }
 
     return Array.from(ticketMap.values()).map((e) => ({
       ticketId: e.ticketId,
       ticketTitle: e.ticketTitle,
-      repoId: e.repoId,
       repoName: e.repoName,
       sessionCount: e.sessionCount,
       totalTokens: e.totalTokens,
-      totalCost: e.totalCost,
+      totalCostUsd: e.totalCostUsd,
       models: Array.from(e.models.values()),
     }));
   });
 
   // Per-model cost breakdown
-  app.get("/api/costs/per-model", async () => {
-    // Query opencode DB directly (same source as summary) — no fallback
-    const allSessions = queryOpencodeSessionsSince(0);
+  app.get<{ Querystring: { startDate?: string; endDate?: string } }>("/api/costs/per-model", async (req) => {
+    const startMs = req.query.startDate ? new Date(req.query.startDate).getTime() : 0;
+    const endMs = req.query.endDate ? new Date(req.query.endDate).getTime() : Infinity;
 
-    // Cross-reference with OpenTack sessions for ticket counts
-    const ticketMap = new Map<string, string>();
-    const otSessions = await db
-      .select({ ticketId: schema.sessions.ticketId, opencodeSessionId: schema.sessions.opencodeSessionId })
-      .from(schema.sessions);
-    for (const s of otSessions) {
-      if (s.ticketId && s.opencodeSessionId) ticketMap.set(s.opencodeSessionId, s.ticketId);
-    }
+    // Single source of truth: opencode DB. No OpenTack tables touched.
+    const allSessions = queryOpencodeSessionsSince(startMs);
 
     const perModel = new Map<string, {
-      totalCost: number;
-      totalTokens: number;
+      costUsd: number;
+      tokens: number;
       sessionCount: number;
-      tickets: Set<string>;
     }>();
 
     for (const s of allSessions) {
+      if (s.timeCreated > endMs) continue;
       const model = s.model ? normalizeModel(s.model) : null;
       if (!model) continue;
       if (!perModel.has(model)) {
-        perModel.set(model, { totalCost: 0, totalTokens: 0, sessionCount: 0, tickets: new Set() });
+        perModel.set(model, { costUsd: 0, tokens: 0, sessionCount: 0 });
       }
       const entry = perModel.get(model)!;
       entry.sessionCount++;
-      const ticketId = ticketMap.get(s.id);
-      if (ticketId) entry.tickets.add(ticketId);
-      entry.totalCost += s.cost;
-      entry.totalTokens += s.tokensInput + s.tokensOutput + s.tokensReasoning;
+      entry.costUsd += s.cost;
+      entry.tokens += s.tokensInput + s.tokensOutput + s.tokensReasoning;
     }
 
     return Array.from(perModel.entries()).map(([model, data]) => ({
       model,
-      totalCost: data.totalCost,
-      totalTokens: data.totalTokens,
+      costUsd: data.costUsd,
+      tokens: data.tokens,
       sessionCount: data.sessionCount,
-      ticketCount: data.tickets.size,
+      ticketCount: 0,
     }));
   });
 }
