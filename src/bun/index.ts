@@ -93,6 +93,7 @@ const rpc = BrowserView.defineRPC<OpenTackRPC>({
       ghInstall: () => handlers.ghInstall(),
       ghAuthLogin: () => handlers.ghAuthLogin(),
       ghAuthLoginPoll: (params) => handlers.ghAuthLoginPoll(params),
+      ghLogout: () => handlers.ghLogout(),
 
       // Submit for Review
       submitForReview: ({ ticketId }) => handlers.submitForReview({ ticketId }),

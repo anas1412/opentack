@@ -155,7 +155,10 @@ export default function GhSettings() {
     }
   };
 
-  const handleDisconnect = () => {
+  const handleDisconnect = async () => {
+    // Clear gh CLI credentials
+    try { await request("ghLogout"); } catch { /* continue anyway */ }
+    // Clear stored token
     saveGhSettings.mutate({ ghToken: "" });
     setGhState({ phase: "no-token" });
     setGhAuth("no-token");
@@ -173,25 +176,38 @@ export default function GhSettings() {
   };
 
   // ── OAuth flow state ────────────────────────────────────────────────
-  type OAuthPhase = "idle" | "starting" | "waiting" | "error" | "expired";
+  type OAuthPhase = "idle" | "starting" | "authorizing" | "error" | "expired";
   const [oauthPhase, setOauthPhase] = useState<OAuthPhase>("idle");
   const [oauthUserCode, setOauthUserCode] = useState("");
   const [oauthVerificationUri, setOauthVerificationUri] = useState("");
   const [oauthProcessId, setOauthProcessId] = useState("");
   const [oauthError, setOauthError] = useState("");
-  const oauthPollRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const [oauthConfirming, setOauthConfirming] = useState(false);
+  const oauthPollRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const processIdRef = useRef("");
+  const oauthActiveRef = useRef(false);
 
-  const stopOAuthPolling = useCallback(() => {
+  // Keep processId in a ref so the poll function always has the latest value
+  useEffect(() => { processIdRef.current = oauthProcessId; }, [oauthProcessId]);
+
+  const cancelOAuth = useCallback(() => {
+    oauthActiveRef.current = false;
     if (oauthPollRef.current) {
-      clearInterval(oauthPollRef.current);
+      clearTimeout(oauthPollRef.current);
       oauthPollRef.current = null;
     }
+    setOauthPhase("idle");
+    setOauthError("");
+    setOauthConfirming(false);
   }, []);
 
   // Clean up polling on unmount
   useEffect(() => {
-    return () => stopOAuthPolling();
-  }, [stopOAuthPolling]);
+    return () => {
+      oauthActiveRef.current = false;
+      if (oauthPollRef.current) clearTimeout(oauthPollRef.current);
+    };
+  }, []);
 
   const handleSignInWithGithub = async () => {
     setOauthPhase("starting");
@@ -200,43 +216,79 @@ export default function GhSettings() {
     try {
       const { processId, userCode, verificationUri } = await request("ghAuthLogin");
       setOauthProcessId(processId);
+      processIdRef.current = processId;
       setOauthUserCode(userCode);
       setOauthVerificationUri(verificationUri);
-      setOauthPhase("waiting");
+      setOauthPhase("authorizing");
+
+      // Auto-copy code to clipboard
+      try { await navigator.clipboard.writeText(userCode); } catch { /* ignore */ }
 
       // Open GitHub device activation page
-      request("openUrl", { url: `${verificationUri}?code=${userCode}` });
+      request("openUrl", { url: "https://github.com/login/device" });
 
-      // Start polling
-      stopOAuthPolling();
-      oauthPollRef.current = setInterval(async () => {
+      // Mark flow as active
+      oauthActiveRef.current = true;
+
+      // Background polling (auto-detect if user authorizes)
+      const poll = async () => {
+        if (!oauthActiveRef.current) return;
         try {
-          const poll = await request("ghAuthLoginPoll", { processId });
+          const pollRes = await request("ghAuthLoginPoll", { processId: processIdRef.current });
+          if (!oauthActiveRef.current) return;
 
-          if (poll.status === "success" && poll.user) {
-            stopOAuthPolling();
-            setOauthPhase("idle");
-            setGhState({ phase: "authed", user: poll.user });
-            setGhAuth("authed", poll.user as GhUser);
-          } else if (poll.status === "expired") {
-            stopOAuthPolling();
-            setOauthPhase("expired");
-            setOauthError(poll.error || "Session expired");
-          } else if (poll.status === "error") {
-            stopOAuthPolling();
-            setOauthPhase("error");
-            setOauthError(poll.error || "Authorization failed");
+          if (pollRes.status === "success" && pollRes.user) {
+            cancelOAuth();
+            setGhState({ phase: "authed", user: pollRes.user });
+            setGhAuth("authed", pollRes.user as GhUser);
+            return;
           }
-          // "pending" — keep polling
-        } catch (err) {
-          stopOAuthPolling();
-          setOauthPhase("error");
-          setOauthError(err instanceof Error ? err.message : "Polling failed");
-        }
-      }, 5000);
+
+          if (pollRes.status === "expired") {
+            cancelOAuth();
+            setOauthPhase("expired");
+            setOauthError(pollRes.error || "Session expired");
+            return;
+          }
+        } catch { /* keep polling */ }
+
+        if (oauthActiveRef.current) oauthPollRef.current = setTimeout(poll, 5000);
+      };
+
+      // Start background polling
+      if (oauthPollRef.current) clearTimeout(oauthPollRef.current);
+      oauthPollRef.current = setTimeout(poll, 3000);
     } catch (err) {
       setOauthPhase("error");
       setOauthError(err instanceof Error ? err.message : "Failed to start authorization");
+    }
+  };
+
+  const handleConfirmAuthorized = async () => {
+    setOauthConfirming(true);
+    setOauthError("");
+    try {
+      const testRes = await request("ghTest");
+      if (testRes.ok && testRes.user) {
+        cancelOAuth();
+        setGhState({ phase: "authed", user: testRes.user });
+        setGhAuth("authed", testRes.user as GhUser);
+        return;
+      }
+      if (processIdRef.current) {
+        const pollRes = await request("ghAuthLoginPoll", { processId: processIdRef.current });
+        if (pollRes.status === "success" && pollRes.user) {
+          cancelOAuth();
+          setGhState({ phase: "authed", user: pollRes.user });
+          setGhAuth("authed", pollRes.user as GhUser);
+          return;
+        }
+      }
+      setOauthError("Not yet authorized. Make sure you entered the code on GitHub.");
+      setOauthConfirming(false);
+    } catch (err) {
+      setOauthError(err instanceof Error ? err.message : "Check failed");
+      setOauthConfirming(false);
     }
   };
 
@@ -244,7 +296,6 @@ export default function GhSettings() {
     try {
       await navigator.clipboard.writeText(oauthUserCode);
     } catch {
-      // Fallback — select the code text
       const el = document.getElementById("oauth-user-code");
       if (el) {
         const range = document.createRange();
@@ -386,19 +437,17 @@ export default function GhSettings() {
         </div>
       )}
 
-      {/* OAuth flow: waiting for user to authorize */}
-      {ghState.phase === "no-token" && oauthPhase === "waiting" && (
+      {/* OAuth flow: showing code + waiting for user */}
+      {ghState.phase === "no-token" && oauthPhase === "authorizing" && (
         <div className="border border-zinc-800 rounded-lg p-4 mb-4">
-          <div className="flex items-center gap-2 mb-3">
-            <Loader2 size={14} className="animate-spin text-[var(--accent)]" />
-            <p className="text-sm text-zinc-300 font-medium">Waiting for authorization</p>
+          <div className="mb-3">
+            <p className="text-sm text-zinc-300 font-medium mb-1">Authorize GitHub access</p>
+            <p className="text-xs text-zinc-500">
+              Enter this code on the GitHub page that opened in your browser:
+            </p>
           </div>
 
-          <p className="text-xs text-zinc-500 mb-3">
-            Enter the code below on GitHub's device activation page (opened in your browser).
-          </p>
-
-          {/* One-time code */}
+          {/* Code */}
           <div className="bg-zinc-950 border border-zinc-800 rounded-lg px-4 py-3 mb-3 flex items-center justify-between">
             <code
               id="oauth-user-code"
@@ -416,21 +465,38 @@ export default function GhSettings() {
             </button>
           </div>
 
+          {/* Buttons */}
           <div className="flex items-center gap-2">
             <button
-              onClick={() => request("openUrl", { url: `${oauthVerificationUri}?code=${oauthUserCode}` })}
-              className="flex items-center gap-1.5 px-3 py-1.5 rounded text-xs font-medium bg-zinc-800 hover:bg-zinc-700 text-zinc-200 transition-colors"
+              onClick={handleConfirmAuthorized}
+              disabled={oauthConfirming}
+              className="flex items-center gap-1.5 px-4 py-2 rounded text-xs font-medium bg-[var(--accent)] text-white hover:opacity-90 transition-colors disabled:opacity-50 cursor-pointer"
+            >
+              {oauthConfirming ? (
+                <Loader2 size={12} className="animate-spin" />
+              ) : (
+                <CheckCircle size={12} />
+              )}
+              {oauthConfirming ? "Checking..." : "I've authorized — Confirm"}
+            </button>
+            <button
+              onClick={() => request("openUrl", { url: "https://github.com/login/device" })}
+              className="flex items-center gap-1.5 px-3 py-2 rounded text-xs font-medium bg-zinc-800 hover:bg-zinc-700 text-zinc-200 transition-colors cursor-pointer"
             >
               <ExternalLink size={12} />
               Open GitHub
             </button>
             <button
-              onClick={stopOAuthPolling}
-              className="px-3 py-1.5 rounded text-xs text-zinc-500 hover:text-zinc-300 transition-colors bg-transparent border border-zinc-800 hover:border-zinc-700 cursor-pointer"
+              onClick={cancelOAuth}
+              className="ml-auto px-3 py-2 rounded text-xs text-zinc-500 hover:text-zinc-300 transition-colors bg-transparent border border-zinc-800 hover:border-zinc-700 cursor-pointer"
             >
               Cancel
             </button>
           </div>
+
+          {oauthError && (
+            <p className="text-xs text-amber-400 mt-2">{oauthError}</p>
+          )}
         </div>
       )}
 

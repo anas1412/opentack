@@ -140,6 +140,7 @@ export type OpenTackRPC = {
       ghInstall: { params: void; response: { success: boolean; path?: string; error?: string; message?: string } }
       ghAuthLogin: { params: void; response: { processId: string; userCode: string; verificationUri: string } }
       ghAuthLoginPoll: { params: { processId: string }; response: { status: "pending" | "success" | "error" | "expired"; error?: string; user?: { login: string; name: string | null; email: string | null; avatarUrl: string | null; plan: string | null } } }
+      ghLogout: { params: void; response: { ok: boolean; error?: string } }
 
       // ─── System ─────────────────────────────────────────
       openUrl: { params: { url: string }; response: void }

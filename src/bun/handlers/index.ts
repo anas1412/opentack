@@ -1160,6 +1160,16 @@ export async function ghInstall(): Promise<{ success: boolean; path?: string; er
   }
 }
 
+export async function ghLogout(): Promise<{ ok: boolean; error?: string }> {
+  const { runGh } = await import("../../shared/gh-runner")
+  // gh auth logout requires the host flag
+  const result = await runGh({ args: ["auth", "logout", "-h", "github.com"] })
+  if (result.exitCode === 0) return { ok: true }
+  // If logout fails (e.g., already logged out), still consider it a success
+  if (result.stderr.includes("not logged in")) return { ok: true }
+  return { ok: false, error: result.stderr || "Logout failed" }
+}
+
 // ─── GitHub OAuth Device Flow ──────────────────────────────────────────
 //
 // 1. Start device flow via GitHub API fetch → get device_code + user_code + URL
@@ -1294,21 +1304,25 @@ export async function ghAuthLoginPoll(
 
   // Token received!
   if (data.access_token) {
+    console.log("[ghAuthLogin] token received, injecting via gh auth login --with-token")
     return await handleTokenSuccess(params.processId, data.access_token)
   }
 
   // Still pending
   if (data.error === "authorization_pending" || data.error === "slow_down") {
+    console.log("[ghAuthLogin] poll:", data.error)
     return { status: "pending" }
   }
 
   // Session expired / denied
   if (data.error === "expired_token" || data.error === "access_denied") {
+    console.log("[ghAuthLogin] session expired:", data.error)
     oauthSessions.delete(params.processId)
     return { status: "expired", error: data.error_description || data.error }
   }
 
   // Unexpected error
+  console.log("[ghAuthLogin] unexpected response:", JSON.stringify(data))
   return { status: "error", error: data.error_description || data.error || "Unknown error" }
 }
 
